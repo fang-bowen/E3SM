@@ -117,6 +117,7 @@ contains
          htvp                    => col_ef%htvp                , & ! Input:  [real(r8) (:)   ]  latent heat of vapor of water (or sublimation) [j/kg]
          eflx_building_heat      => col_ef%eflx_building_heat  , & ! Input:  [real(r8) (:)   ]  heat flux from urban building interior to walls, roof
          eflx_wasteheat_patch    => veg_ef%eflx_wasteheat    , & ! Input:  [real(r8) (:)   ]  sensible heat flux from urban heating/cooling sources of waste heat (W/m**2)
+         eflx_ventilation_patch  => veg_ef%eflx_ventilation  , & ! Input:  [real(r8) (:)   ]  sensible heat flux from building ventilation (W/m**2)
          eflx_heat_from_ac_patch => veg_ef%eflx_heat_from_ac , & ! Input:  [real(r8) (:)   ]  sensible heat flux put back into canyon due to removal by AC (W/m**2)
          eflx_traffic_patch      => veg_ef%eflx_traffic      , & ! Input:  [real(r8) (:)   ]  traffic sensible heat flux (W/m**2)
          dlrad                   => veg_ef%dlrad             , & ! Input:  [real(r8) (:)   ]  downward longwave radiation below the canopy [W/m2]
@@ -303,7 +304,8 @@ contains
             eflx_soil_grnd(p) = sabg(p) + dlrad(p) &
                  - eflx_lwrad_net(p) - eflx_lwrad_del(p) &
                  - (eflx_sh_grnd(p) + qflx_evap_soi(p)*htvp(c) + qflx_tran_veg(p)*hvap) &
-                 + eflx_wasteheat_patch(p) + eflx_heat_from_ac_patch(p) + eflx_traffic_patch(p)
+                 + eflx_wasteheat_patch(p) + eflx_heat_from_ac_patch(p) + eflx_traffic_patch(p) &
+                 + eflx_ventilation_patch(p)
             eflx_soil_grnd_u(p) = eflx_soil_grnd(p)
          end if
 

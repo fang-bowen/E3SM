@@ -9,6 +9,7 @@ module UrbanParamsType
   use shr_log_mod  , only : errMsg => shr_log_errMsg
   use abortutils   , only : endrun
   use decompMod    , only : bounds_type
+  use histFileMod    , only : hist_addfld1d
   use elm_varctl   , only : iulog, fsurdat
   use elm_varcon   , only : namel, grlnd, spval
   use LandunitType , only : lun_pp 
@@ -19,9 +20,12 @@ module UrbanParamsType
   save
   private
   !
-  ! !PRIVATE MEMBER FUNCTIONS:
+  ! !PUBLIC MEMBER FUNCTIONS:
+  public  :: UrbanReadNML      ! Read in the urban namelist items
   public  :: UrbanInput         ! Read in urban input data
   public  :: CheckUrban         ! Check validity of urban points
+  public  :: IsSimpleBuildTemp ! If using the simple building temperature method
+  public  :: IsProgBuildTemp   ! If using the prognostic building temperature method
   !
   ! !PRIVATE TYPE 
   type urbinp_type
@@ -102,14 +106,21 @@ module UrbanParamsType
   character(len= *), parameter, public :: urban_hac_on =  'ON'                 
   character(len= *), parameter, public :: urban_wasteheat_on = 'ON_WASTEHEAT'  
   character(len= 16), public           :: urban_hac = urban_hac_off
-  
-  logical, public            :: urban_traffic      = .false.   ! urban traffic fluxes
+  logical, public                      :: urban_explicit_ac = .true.  ! whether to use explicit, time-varying AC adoption rate
+  logical, public                      :: urban_traffic      = .false.   ! urban traffic fluxes
   !$acc declare copyin(urban_hac_off     )
   !$acc declare copyin(urban_hac_on      )
   !$acc declare copyin(urban_wasteheat_on)
   !!!$acc declare copyin(urban_hac       )
   !$acc declare copyin(urban_traffic     )
+  !$acc declare copyin(urban_explicit_ac)
   !-----------------------------------------------------------------------
+
+    ! !PRIVATE MEMBER DATA:
+  logical, private    :: ReadNamelist = .false.     ! If namelist was read yet or not
+  integer, parameter, private :: BUILDING_TEMP_METHOD_SIMPLE = 0       ! Simple method introduced in CLM4.5
+  integer, parameter, private :: BUILDING_TEMP_METHOD_PROG   = 1       ! Prognostic method introduced in CLM5.0
+  integer, private :: building_temp_method = BUILDING_TEMP_METHOD_PROG ! Method to calculate the building temperature
 
   !-----------------------------------------------------------------------
   ! declare the public instance of urban parameters data types
@@ -197,6 +208,18 @@ module UrbanParamsType
     allocate(this%alb_wall_dir        (begl:endl,numrad))   ; this%alb_wall_dir        (:,:) = spval
     allocate(this%alb_wall_dif        (begl:endl,numrad))   ; this%alb_wall_dif        (:,:) = spval
     allocate(this%eflx_traffic_factor (begl:endl))          ; this%eflx_traffic_factor (:)   = spval
+    
+    !-----------------------------------------------------------------------
+    ! initialize history fields for select members of lun_es
+    !-----------------------------------------------------------------------
+    call hist_addfld1d(fname='T_BUILDING_MAX', units='K',  &
+            avgflag='A', long_name='Temperature building maximum temperature', &
+            ptr_lunit=this%t_building_max, set_nourb=spval, l2g_scale_type='unity', &
+            default='inactive')
+    call hist_addfld1d(fname='T_BUILDING_MIN', units='K',  &
+            avgflag='A', long_name='Temperature building maximum temperature', &
+            ptr_lunit=this%t_building_min, set_nourb=spval, l2g_scale_type='unity', &
+            default='inactive')
 
     ! Initialize time constant urban variables
 
@@ -860,6 +883,143 @@ module UrbanParamsType
     end if
 
   end subroutine CheckUrban
+ 
+  !-----------------------------------------------------------------------
 
+  !-----------------------------------------------------------------------
+  !BOP
+  !
+  ! !IROUTINE: UrbanReadNML
+  !
+  ! !INTERFACE:
+  !
+  subroutine UrbanReadNML ( NLFilename )
+   !
+   ! !DESCRIPTION:
+   !
+   ! Read in the urban namelist
+   !
+   ! !USES:
+   use shr_mpi_mod   , only : shr_mpi_bcast
+   use abortutils    , only : endrun
+   use spmdMod       , only : masterproc, mpicom
+   use fileutils     , only : getavu, relavu, opnfil
+   use shr_nl_mod    , only : shr_nl_find_group_name
+   use shr_mpi_mod   , only : shr_mpi_bcast
+   implicit none
+   !
+   ! !ARGUMENTS:
+   character(len=*), intent(IN) :: NLFilename ! Namelist filename
+   !
+   ! !LOCAL VARIABLES:
+   integer :: ierr                 ! error code
+   integer :: unitn                ! unit for namelist file
+   character(len=32) :: subname = 'UrbanReadNML'  ! subroutine name
+
+   namelist / elmu_inparm / urban_hac, urban_explicit_ac, urban_traffic, building_temp_method
+   !EOP
+   !-----------------------------------------------------------------------
+
+   ! ----------------------------------------------------------------------
+   ! Read namelist from input namelist filename
+   ! ----------------------------------------------------------------------
+
+   if ( masterproc )then
+
+      unitn = getavu()
+      write(iulog,*) 'Read in elmu_inparm  namelist'
+      call opnfil (NLFilename, unitn, 'F')
+      call shr_nl_find_group_name(unitn, 'elmu_inparm', status=ierr)
+      if (ierr == 0) then
+         read(unitn, elmu_inparm, iostat=ierr)
+         if (ierr /= 0) then
+            call endrun(msg="ERROR reading elmu_inparm namelist"//errmsg(__FILE__, __LINE__))
+         end if
+      else
+         call endrun(msg="ERROR finding elmu_inparm namelist"//errmsg(__FILE__, __LINE__))
+      end if
+      call relavu( unitn )
+
+   end if
+
+   ! Broadcast namelist variables read in
+   call shr_mpi_bcast(urban_hac,             mpicom)
+   call shr_mpi_bcast(urban_explicit_ac,     mpicom)
+   call shr_mpi_bcast(urban_traffic,         mpicom)
+   call shr_mpi_bcast(building_temp_method,  mpicom)
+
+   !
+   if (urban_traffic) then
+      write(iulog,*)'Urban traffic fluxes are not implemented currently'
+      call endrun(msg=errMsg(__FILE__, __LINE__))
+   end if
+   !
+   if ( masterproc )then
+      write(iulog,*) '   urban air conditioning/heating and wasteheat   = ', urban_hac
+      write(iulog,*) '   urban explicit air-conditioning adoption rate  = ', urban_explicit_ac
+      write(iulog,*) '   urban traffic flux   = ', urban_traffic
+   end if
+
+   ReadNamelist = .true.
+
+ end subroutine UrbanReadNML
+ 
+  !-----------------------------------------------------------------------
+
+  !-----------------------------------------------------------------------
+  !BOP
+  !
+  ! !IROUTINE: IsSimpleBuildTemp
+  !
+  ! !INTERFACE:
+  !
+  logical function IsSimpleBuildTemp( )
+    !
+    ! !DESCRIPTION:
+    !
+    ! If the simple building temperature method is being used
+    !
+    ! !USES:
+    implicit none
+    !EOP
+    !-----------------------------------------------------------------------
+
+    if ( .not. ReadNamelist )then
+       write(iulog,*)'Testing on building_temp_method before urban namelist was read in'
+       call endrun(msg=errMsg(__FILE__, __LINE__))
+    end if
+    IsSimpleBuildTemp = building_temp_method == BUILDING_TEMP_METHOD_SIMPLE
+
+  end function IsSimpleBuildTemp
+
+  !-----------------------------------------------------------------------
+
+  !-----------------------------------------------------------------------
+  !BOP
+  !
+  ! !IROUTINE: IsProgBuildTemp
+  !
+  ! !INTERFACE:
+  !
+  logical function IsProgBuildTemp( )
+    !
+    ! !DESCRIPTION:
+    !
+    ! If the prognostic building temperature method is being used
+    !
+    ! !USES:
+    implicit none
+    !EOP
+    !-----------------------------------------------------------------------
+
+    if ( .not. ReadNamelist )then
+       write(iulog,*)'Testing on building_temp_method before urban namelist was read in'
+       call endrun(msg=errMsg(__FILE__, __LINE__))
+    end if
+    IsProgBuildTemp = building_temp_method == BUILDING_TEMP_METHOD_PROG
+
+  end function IsProgBuildTemp
+
+  !-----------------------------------------------------------------------
 
 end module UrbanParamsType

@@ -57,6 +57,8 @@ module elm_initializeMod
 #endif
   !-----------------------------------------------------------------------
 
+  integer :: actual_nlevurb ! nlevurb from sfc dataset
+
 contains
 
   !-----------------------------------------------------------------------
@@ -71,6 +73,7 @@ contains
     use elm_varpar                , only: mxpft, numveg, mxpft_nc, numpft
     use elm_varpar                , only: update_pft_array_bounds
     use elm_varpar                , only: surfpft_lb, surfpft_ub
+    use surfrdMod                 , only: surfrd_get_nlevurb
     use elm_varcon                , only: elm_varcon_init
     use landunit_varcon           , only: landunit_varcon_init, max_lunit, istice_mec, max_polygon, max_non_poly_lunit
     use column_varcon             , only: col_itype_to_icemec_class
@@ -142,10 +145,14 @@ contains
     endif
 
     call control_init()
-    call elm_varpar_init()
+    call ncd_pio_init()
+    call surfrd_get_nlevurb(fsurdat, actual_nlevurb)
+    
+    call elm_varpar_init(actual_nlevurb)
     call elm_varcon_init()
     call landunit_varcon_init()
     call ncd_pio_init()
+
     if(use_fates) then
        ! Allow FATES to dictate the number of patches per column.
        ! We still use numcft as dictated by

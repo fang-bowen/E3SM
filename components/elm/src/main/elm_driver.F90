@@ -32,6 +32,7 @@ module elm_driver
   use BalanceCheckMod        , only : BeginGridWaterBalance, GridBalanceCheck
   !
   use CanopyTemperatureMod   , only : CanopyTemperature ! (formerly Biogeophysics1Mod)
+  use UrbanTimeVarType       , only : urbantv_type
   use SoilTemperatureMod     , only : SoilTemperature
   use LakeTemperatureMod     , only : LakeTemperature
   !
@@ -137,7 +138,8 @@ module elm_driver
   use elm_instMod            , only : sedflux_vars
   use tracer_varcon          , only : is_active_betr_bgc
   use CNEcosystemDynBetrMod  , only : CNEcosystemDynBetr, CNFluxStateBetrSummary
-  use UrbanParamsType        , only : urbanparams_vars
+  use UrbanParamsType        , only : urbanparams_vars   !!! not used in clm_driver, verify exactly why (REMOVE COMMENT)
+  use UrbanTimeVarType       , only : urbantv_vars    !!! not used in clm_driver, verify exactly why (REMOVE COMMENT)
 
   use GridcellType           , only : grc_pp
   use GridcellDataType       , only : grc_cs, c13_grc_cs, c14_grc_cs
@@ -256,6 +258,7 @@ contains
     nclumps = get_proc_clumps()
     nstep_mod = get_nstep()
     dtime_mod = real(get_step_size(),r8)
+
     call get_curr_date(year_curr,mon_curr, day_curr,secs_curr)
     dayspyr_mod = get_days_per_year()
     jday_mod = get_curr_calday()
@@ -276,7 +279,7 @@ contains
           call CNPBudget_Reset()
        end if
     end if
-
+    
 
     ! ============================================================================
     ! Specified phenology
@@ -289,6 +292,7 @@ contains
           call interpMonthlyVeg(bounds_proc, canopystate_vars)
           call t_stopf('interpMonthlyVeg')
        endif
+       
 
     elseif(use_fates) then
        if(use_fates_sp) then
@@ -664,6 +668,11 @@ contains
        call fanstream_interp(bounds_proc, atm2lnd_vars)
     end if
 
+    ! REMOVE MAYBE
+    ! Get time varying urban data
+    call urbantv_vars%urbantv_interp(bounds_proc)
+    ! REMOVE MAYBE
+
     ! ============================================================================
     ! Initialize variables from previous time step, downscale atm forcings, and
     ! Determine canopy interception and precipitation onto ground surface.
@@ -686,6 +695,7 @@ contains
             filter(nc)%num_nolakep, filter(nc)%nolakep, &
             filter(nc)%num_soilp  , filter(nc)%soilp,   &
             canopystate_vars, energyflux_vars)
+
 
        call downscale_forcings(bounds_clump, &
             filter(nc)%num_do_smb_c, filter(nc)%do_smb_c, &
@@ -859,9 +869,11 @@ contains
        call t_startf('soiltemperature')
        call SoilTemperature(bounds_clump,                     &
             filter(nc)%num_urbanl  , filter(nc)%urbanl,       &
+            filter(nc)%num_urbanc  , filter(nc)%urbanc,       &
             filter(nc)%num_nolakec , filter(nc)%nolakec,      &
             atm2lnd_vars, urbanparams_vars, canopystate_vars, &
-            solarabs_vars, soilstate_vars, energyflux_vars )
+            solarabs_vars, soilstate_vars, energyflux_vars, urbantv_vars)
+        
        call t_stopf('soiltemperature')
 
 

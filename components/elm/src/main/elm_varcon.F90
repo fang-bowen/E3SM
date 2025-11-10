@@ -12,7 +12,8 @@ module elm_varcon
   use shr_const_mod , only: SHR_CONST_LATSUB,SHR_CONST_LATICE,SHR_CONST_RHOFW
   use shr_const_mod , only: SHR_CONST_RHOICE,SHR_CONST_TKFRZ,SHR_CONST_REARTH
   use shr_const_mod , only: SHR_CONST_PDB, SHR_CONST_PI, SHR_CONST_CDAY
-  use shr_const_mod , only: SHR_CONST_RGAS
+  use shr_const_mod , only: SHR_CONST_RGAS, SHR_CONST_PSTD
+  use shr_const_mod , only: SHR_CONST_CPWV
   use elm_varpar    , only: numrad, nlevgrnd, nlevlak, nlevdecomp_full
   use elm_varpar    , only: ngases
   use elm_varpar    , only: nlayer
@@ -52,12 +53,14 @@ module elm_varcon
   real(r8) :: cpliq  = SHR_CONST_CPFW                       ! Specific heat of water [J/kg-K]
   real(r8) :: cpice  = SHR_CONST_CPICE                      ! Specific heat of ice [J/kg-K]
   real(r8) :: cpair  = SHR_CONST_CPDAIR                     ! specific heat of dry air [J/kg/K]
+  real(r8), public :: cpwvap = SHR_CONST_CPWV                       ! specific heat of water vapor [J/kg/K]
   real(r8) :: hvap   = SHR_CONST_LATVAP                     ! Latent heat of evap for water [J/kg]
   real(r8) :: hsub   = SHR_CONST_LATSUB                     ! Latent heat of sublimation    [J/kg]
   real(r8) :: hfus   = SHR_CONST_LATICE                     ! Latent heat of fusion for ice [J/kg]
   real(r8) :: denh2o = SHR_CONST_RHOFW                      ! density of liquid water [kg/m3]
   real(r8) :: denice = SHR_CONST_RHOICE                     ! density of ice [kg/m3]
   real(r8) :: rgas   = SHR_CONST_RGAS                       ! universal gas constant [J/K/kmole]
+  real(r8), public :: pstd   = SHR_CONST_PSTD                       ! standard pressure [Pa]
   real(r8) :: tkair  = 0.023_r8                             ! thermal conductivity of air   [W/m/K]
   real(r8) :: tkice  = 2.290_r8                             ! thermal conductivity of ice   [W/m/K]
   real(r8) :: tkwat  = 0.57_r8                              ! thermal conductivity of water [W/m/K]
@@ -136,16 +139,45 @@ module elm_varcon
   real(r8) :: c14ratio = 1.e-12_r8
   ! real(r8) :: c14ratio = 1._r8  ! debug lets set to 1 to try to avoid numerical errors
 
+  ! REMOVE
   ! Note that the wasteheat factors are currently set to zero until a better parameterization can be developed
   ! The prior parameterization appeared to be significantly overestimating wasteheat
-  real(r8) :: ht_wasteheat_factor = 0.0_r8  !wasteheat factor for urban heating (-)
-  real(r8) :: ac_wasteheat_factor = 0.0_r8  !wasteheat factor for urban air conditioning (-)
-  real(r8) :: wasteheat_limit = 100._r8  !limit on wasteheat (W/m2)
+  ! real(r8) :: ht_wasteheat_factor = 0.0_r8  !wasteheat factor for urban heating (-)
+  ! real(r8) :: ac_wasteheat_factor = 0.0_r8  !wasteheat factor for urban air conditioning (-)
+  ! real(r8) :: wasteheat_limit = 100._r8  !limit on wasteheat (W/m2)
+  ! END REMOVE
+
+  !------------------------------------------------------------------
+  ! Urban building temperature constants
+  !------------------------------------------------------------------
+  real(r8), public :: ht_wasteheat_factor = 0.2_r8   ! wasteheat factor for urban heating (-)
+  real(r8), public :: ac_wasteheat_factor = 0.6_r8   ! wasteheat factor for urban air conditioning (-)
+  real(r8), public :: em_roof_int  = 0.9_r8          ! emissivity of interior surface of roof (Bueno et al. 2012, GMD)
+  real(r8), public :: em_sunw_int  = 0.9_r8          ! emissivity of interior surface of sunwall (Bueno et al. 2012, GMD)
+  real(r8), public :: em_shdw_int  = 0.9_r8          ! emissivity of interior surface of shadewall Bueno et al. 2012, GMD)
+  real(r8), public :: em_floor_int = 0.9_r8          ! emissivity of interior surface of floor (Bueno et al. 2012, GMD)
+  real(r8), public :: hcv_roof = 0.948_r8            ! interior convective heat transfer coefficient for roof (Bueno et al. 2012, GMD) (W m-2 K-1)
+  real(r8), public :: hcv_roof_enhanced  = 4.040_r8  ! enhanced (t_roof_int <= t_room) interior convective heat transfer coefficient for roof (Bueno et al. 2012, GMD) !(W m-2 K-1)
+  real(r8), public :: hcv_floor = 0.948_r8           ! interior convective heat transfer coefficient for floor (Bueno et al. 2012, GMD) (W m-2 K-1)
+  real(r8), public :: hcv_floor_enhanced  = 4.040_r8 ! enhanced (t_floor_int >= t_room) interior convective heat transfer coefficient for floor (Bueno et al.  !2012, GMD) (W m-2 K-1)
+  real(r8), public :: hcv_sunw  = 3.076_r8           ! interior convective heat transfer coefficient for sunwall (Bueno et al. 2012, GMD) (W m-2 K-1)
+  real(r8), public :: hcv_shdw  = 3.076_r8           ! interior convective heat transfer coefficient for shadewall (Bueno et al. 2012, GMD) (W m-2 K-1)
+  real(r8), public :: dz_floor = 0.1_r8                 ! floor thickness - concrete (Salmanca et al. 2010, TAC) (m)
+  real(r8), public, parameter :: dens_floor = 2.35e3_r8 ! density of floor - concrete (Salmanca et al. 2010, TAC) (kg m-3)
+  real(r8), public, parameter :: sh_floor = 880._r8     ! specific heat of floor - concrete (Salmanca et al. 2010, TAC) (J kg-1 K-1)
+  real(r8), public :: cp_floor = dens_floor*sh_floor    ! volumetric heat capacity of floor - concrete (Salmanca et al. 2010, TAC) (J m-3 K-1)
+  real(r8), public :: vent_ach = 0.3                    ! ventilation rate (air exchanges per hour)
+  real(r8), public :: rh_building_max = 65._r8          ! maximum internal building air relative humidity (%)
+  
+  real(r8), public :: wasteheat_limit = 100._r8         ! limit on wasteheat (W/m2)
+
+  !------------------------------------------------------------------
 
   real(r8) :: h2osno_max = 1000._r8      ! max allowed snow thickness (mm H2O)
   real(r8), parameter :: lapse_glcmec = 0.006_r8  ! surface temperature lapse rate (deg m-1)
                                                   ! Pritchard et al. (GRL, 35, 2008) use 0.006  
   real(r8), parameter :: glcmec_rain_snow_threshold = SHR_CONST_TKFRZ  ! temperature dividing rain & snow in downscaling (K)
+
 
   integer, private :: i  ! loop index
 

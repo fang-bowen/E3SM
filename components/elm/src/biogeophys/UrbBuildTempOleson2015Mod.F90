@@ -1,0 +1,1079 @@
+module UrbBuildTempOleson2015Mod
+
+#include "shr_assert.h"
+
+  !-----------------------------------------------------------------------
+  ! !DESCRIPTION:
+  ! Calculates internal building air temperature
+  !
+  ! !USES:
+  use shr_kind_mod      , only : r8 => shr_kind_r8
+  use decompMod         , only : bounds_type
+  use abortutils        , only : endrun
+  use perf_mod          , only : t_startf, t_stopf
+  use elm_varctl        , only : iulog
+  use UrbanParamsType   , only : urbanparams_type
+  use UrbanTimeVarType  , only : urbantv_type  
+  use atm2lndType       , only : atm2lnd_type
+  use LandunitType      , only : lun_pp                
+  use ColumnType        , only : col_pp       
+  use LandunitDataType  , only : lun_es, lun_ef, lun_ws, lun_wf
+  use ColumnDataType    , only : col_es, col_wf
+  !
+  ! !PUBLIC TYPES:
+  implicit none
+  save
+  private
+  !
+  ! !PUBLIC MEMBER FUNCTIONS:
+  public  :: BuildingTemperature ! Calculation of interior building air temperature, inner 
+                                 ! surface temperatures of walls and roof, and floor temperature
+
+  character(len=*), parameter, private :: sourcefile = &
+       __FILE__
+  !-----------------------------------------------------------------------
+
+contains
+
+!-----------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: BuildingTemperature
+!
+! !INTERFACE:
+  subroutine BuildingTemperature (bounds, num_urbanl, filter_urbanl, num_nolakec, &
+                                  filter_nolakec, num_urbanc, filter_urbanc, &
+                                  tk, urbanparams_vars, atm2lnd_vars, urbantv_vars)
+!
+! !DESCRIPTION:
+! Solve for t_building, inner surface temperatures of roof, sunw, shdw, and floor temperature
+! Five equations, five unknowns (t_roof_inner,t_sunw_inner,t_shdw_inner,t_floor,t_building at n+1)
+! Derived from energy balance equations at each surface and building air
+! rd (radiation), cd (conduction), cv (convection)
+! qrd_roof + qcd_roof + qcv_roof = 0
+! qrd_sunw + qcd_sunw + qcv_sunw = 0
+! qrd_shdw + qcd_shdw + qcv_shdw = 0
+! qrd_floor + qcd_floor + qcv_floor = 0
+! Vbld*rho_hair*cpair*(dt_building/dt) = sum(Asfc*hcv_sfc*(t_sfc - t_building) 
+!                                        + Vvent*rho_hair*cpair*(taf - t_building)
+!   where Vlbd is volume of building air,
+!         rho_hair is density of humid air at t_building (kg m-3),
+!         cpair is specific heat of dry air (J kg-1 K-1),
+!         dt_building is change in interior building temperature (K),
+!         dt is timestep (s),
+!         Asfc is surface area of roof, sunw, shdw, floor (m2)
+!         hcv_sfc is convective heat transfer coefficient for roof, sunw, shdw, floor (W m-2 K-1)
+!         t_sfc is inner surface temperature of roof, sunw, shdw, floor (K)
+!         t_building is interior building temperature (K)
+!         Vvent is ventilation airflow rate (m3 s-1)
+!         taf is urban canyon air temperature (K)
+!
+! This methodology was introduced as part of CLM5.0. 
+!
+! Conduction fluxes are obtained from terms of soil temperature equations
+! Radiation fluxes are obtained from linearizing the longwave radiation equations taking into
+! account view factors for each surface.
+
+! qrd is positive away from the surface toward room air, so qrd = emitted - absorbed,
+!   so positive qrd will result in a decrease in temperature
+! qcd_floor is positive away from surface toward room air, so positive
+!   qcd will result in a decrease in temperature 
+! qcv is positive toward room air, so positive qcv (t_surface > t_room) will 
+!   result in a decrease in temperature
+
+! The LAPACK routine DGESV is used to compute the solution to the real system of linear equations
+!     a * x = b,
+!  where a is an n-by-n matrix and x and b are n-by-nrhs matrices.
+! 
+!  The LU decomposition with partial pivoting and row interchanges is
+!  used to factor a as
+!     a = P * L * U,
+!  where P is a permutation matrix, L is unit lower triangular, and U is
+!  upper triangular.  The factored form of a is then used to solve the
+!  system of equations a * x = b.
+
+! The following is from LAPACK documentation
+! DGESV computes the solution to system of linear equations A * X = B for GE matrices
+!
+!  =========== DOCUMENTATION ===========
+!
+! Online html documentation available at 
+!            http://www.netlib.org/lapack/explore-html/ 
+!
+!  Download DGESV + dependencies 
+!  <a href="http://www.netlib.org/cgi-bin/netlibfiles.tgz?format=tgz&filename=/lapack/lapack_routine/dgesv.f"> 
+!  [TGZ]</a> 
+!  <a href="http://www.netlib.org/cgi-bin/netlibfiles.zip?format=zip&filename=/lapack/lapack_routine/dgesv.f"> 
+!  [ZIP]</a> 
+!  <a href="http://www.netlib.org/cgi-bin/netlibfiles.txt?format=txt&filename=/lapack/lapack_routine/dgesv.f"> 
+!  [TXT]</a>
+!
+!  Definition:
+!  ===========
+!
+!       SUBROUTINE DGESV( N, NRHS, A, LDA, IPIV, B, LDB, INFO )
+! 
+!       .. Scalar Arguments ..
+!       INTEGER            INFO, LDA, LDB, N, NRHS
+!       ..
+!       .. Array Arguments ..
+!       INTEGER            IPIV( * )
+!       DOUBLE PRECISION   A( LDA, * ), B( LDB, * )
+!       ..
+!  
+!
+!  =============
+! 
+! 
+!  DGESV computes the solution to a real system of linear equations
+!     A * X = B,
+!  where A is an N-by-N matrix and X and B are N-by-NRHS matrices.
+! 
+!  The LU decomposition with partial pivoting and row interchanges is
+!  used to factor A as
+!     A = P * L * U,
+!  where P is a permutation matrix, L is unit lower triangular, and U is
+!  upper triangular.  The factored form of A is then used to solve the
+!  system of equations A * X = B.
+!
+!  Arguments:
+!  ==========
+!
+!  \param[in] N
+!           N is INTEGER
+!           The number of linear equations, i.e., the order of the
+!           matrix A.  N >= 0.
+! 
+!  \param[in] NRHS
+!           NRHS is INTEGER
+!           The number of right hand sides, i.e., the number of columns
+!           of the matrix B.  NRHS >= 0.
+! 
+!  \param[in,out] A
+!           A is DOUBLE PRECISION array, dimension (LDA,N)
+!           On entry, the N-by-N coefficient matrix A.
+!           On exit, the factors L and U from the factorization
+!           A = P*L*U; the unit diagonal elements of L are not stored.
+! 
+!  \param[in] LDA
+!           LDA is INTEGER
+!           The leading dimension of the array A.  LDA >= max(1,N).
+! 
+!  \param[out] IPIV
+!           IPIV is INTEGER array, dimension (N)
+!           The pivot indices that define the permutation matrix P;
+!           row i of the matrix was interchanged with row IPIV(i).
+! 
+!  \param[in,out] B
+!           B is DOUBLE PRECISION array, dimension (LDB,NRHS)
+!           On entry, the N-by-NRHS matrix of right hand side matrix B.
+!           On exit, if INFO = 0, the N-by-NRHS solution matrix X.
+! 
+!  \param[in] LDB
+!           LDB is INTEGER
+!           The leading dimension of the array B.  LDB >= max(1,N).
+! 
+!  \param[out] INFO
+!           INFO is INTEGER
+!           = 0:  successful exit
+!           < 0:  if INFO = -i, the i-th argument had an illegal value
+!           > 0:  if INFO = i, U(i,i) is exactly zero.  The factorization
+!                 has been completed, but the factor U is exactly
+!                 singular, so the solution could not be computed.
+!
+!  Authors:
+!  ========
+!
+!  \author Univ. of Tennessee 
+!  \author Univ. of California Berkeley 
+!  \author Univ. of Colorado Denver 
+!  \author NAG Ltd. 
+!
+!  \date November 2011
+!
+!  \ingroup doubleGEsolve
+
+! !CALLED FROM:
+! subroutine SoilTemperature in this module
+!
+! !REVISION HISTORY:
+! 08/17/12 Keith Oleson: Initial code
+
+!
+! !USES:
+    use shr_kind_mod    , only : r8 => shr_kind_r8
+    use elm_time_manager, only : get_step_size_real
+    use elm_varcon      , only : rair, cpair, sb, hcv_roof, hcv_roof_enhanced, &
+                                 hcv_floor, hcv_floor_enhanced, hcv_sunw, hcv_shdw, &
+                                 em_roof_int, em_floor_int, em_sunw_int, em_shdw_int, &
+                                 dz_floor, dens_floor, cp_floor, vent_ach, &
+                                 rh_building_max, hvap,rwat, cpwvap
+    use column_varcon   , only : icol_roof, icol_sunwall, icol_shadewall, icol_road_imperv
+    use elm_varctl      , only : iulog
+    use abortutils      , only : endrun
+    use elm_varpar      , only : nlevurb, nlevsno, nlevgrnd
+    use UrbanParamsType , only : urban_hac, urban_hac_off, urban_hac_on, urban_wasteheat_on, urban_explicit_ac
+    use QSatMod         , only : QSat
+    ! 
+! !ARGUMENTS:
+    implicit none
+    type(bounds_type), intent(in) :: bounds                   ! bounds
+    integer , intent(in)  :: num_nolakec                      ! number of column non-lake points in column filter
+    integer , intent(in)  :: filter_nolakec(:)                ! column filter for non-lake points
+    integer , intent(in)  :: num_urbanc                       ! number of column urban points in column filter
+    integer , intent(in)  :: filter_urbanc(:)                 ! column filter for urban points
+    integer , intent(in)  :: num_urbanl                       ! number of urban landunits in clump
+    integer , intent(in)  :: filter_urbanl(:)                 ! urban landunit filter
+    real(r8), intent(in)  :: tk(bounds%begc: , -nlevsno+1: )  ! thermal conductivity (W m-1 K-1) [col, j]
+    type(urbanparams_type), intent(in)    :: urbanparams_vars ! urban parameters
+    type(atm2lnd_type)    , intent(in)    :: atm2lnd_vars     ! forcing variables from atmosphere
+    type(urbantv_type)    , intent(in)    :: urbantv_vars     ! urban time varying variables   
+!
+! !LOCAL VARIABLES:
+    integer, parameter :: neq = 5          ! number of equation/unknowns
+    integer  :: fc,fl,c,l,g                  ! indices
+    real(r8) :: dtime                      ! land model time step (s)
+    real(r8) :: building_hwr(bounds%begl:bounds%endl)      ! building height to building width ratio (-)
+    real(r8) :: t_roof_inner_bef(bounds%begl:bounds%endl)  ! roof inside surface temperature at previous time step (K)              
+    real(r8) :: t_sunw_inner_bef(bounds%begl:bounds%endl)  ! sunwall inside surface temperature at previous time step (K)              
+    real(r8) :: t_shdw_inner_bef(bounds%begl:bounds%endl)  ! shadewall inside surface temperature at previous time step (K)              
+    real(r8) :: t_floor_bef(bounds%begl:bounds%endl)       ! floor temperature at previous time step (K)              
+    real(r8) :: t_building_bef(bounds%begl:bounds%endl)    ! internal building air temperature at previous time step [K]
+    real(r8) :: t_building_bef_hac(bounds%begl:bounds%endl)! internal building air temperature before applying HAC [K]
+    real(r8) :: q_building_bef(bounds%begl:bounds%endl)    ! internal building air specific humidity at previous time step (kg/kg)
+    real(r8) :: q_building_bef_hac(bounds%begl:bounds%endl)! internal building air specific humidity before applying HAC (kg/kg)
+    real(r8) :: eflx_urban_ac_sat(bounds%begl:bounds%endl) ! urban air conditioning flux under AC adoption saturation (W/m**2)
+    real(r8) :: eflx_urban_ac_sat_lat(bounds%begl:bounds%endl) ! urban air conditioning latent heat flux under AC adoption saturation (W/m**2)
+    real(r8) :: hcv_roofi(bounds%begl:bounds%endl)         ! roof convective heat transfer coefficient (W m-2 K-1)
+    real(r8) :: hcv_sunwi(bounds%begl:bounds%endl)         ! sunwall convective heat transfer coefficient (W m-2 K-1)
+    real(r8) :: hcv_shdwi(bounds%begl:bounds%endl)         ! shadewall convective heat transfer coefficient (W m-2 K-1)
+    real(r8) :: hcv_floori(bounds%begl:bounds%endl)        ! floor convective heat transfer coefficient (W m-2 K-1)
+    real(r8) :: em_roofi(bounds%begl:bounds%endl)          ! roof inside surface emissivity (-)
+    real(r8) :: em_sunwi(bounds%begl:bounds%endl)          ! sunwall inside surface emissivity (-)
+    real(r8) :: em_shdwi(bounds%begl:bounds%endl)          ! shadewall inside surface emissivity (-)
+    real(r8) :: em_floori(bounds%begl:bounds%endl)         ! floor inside surface emissivity (-)
+    real(r8) :: dz_floori(bounds%begl:bounds%endl)         ! concrete floor thickness (m)
+    real(r8) :: cp_floori(bounds%begl:bounds%endl)         ! concrete floor volumetric heat capacity (J m-3 K-1)
+    real(r8) :: cv_floori(bounds%begl:bounds%endl)         ! intermediate calculation for concrete floor (W m-2 K-1)
+    real(r8) :: rho_hair(bounds%begl:bounds%endl)          ! density of humid air at standard pressure and t_building (kg m-3)
+    real(r8) :: cp_hair(bounds%begl:bounds%endl)           ! specific heat capacity of indoor humid air (J kg-1 K-1)
+    real(r8) :: vf_rf(bounds%begl:bounds%endl)             ! view factor of roof for floor (-)
+    real(r8) :: vf_fr(bounds%begl:bounds%endl)             ! view factor of floor for roof (-)
+    real(r8) :: vf_wf(bounds%begl:bounds%endl)             ! view factor of wall for floor (-)
+    real(r8) :: vf_fw(bounds%begl:bounds%endl)             ! view factor of floor for wall (-)
+    real(r8) :: vf_rw(bounds%begl:bounds%endl)             ! view factor of roof for wall (-)
+    real(r8) :: vf_wr(bounds%begl:bounds%endl)             ! view factor of wall for roof (-)
+    real(r8) :: vf_ww(bounds%begl:bounds%endl)             ! view factor of wall for wall (-)
+    real(r8) :: zi_roof_innerl(bounds%begl:bounds%endl)    ! interface depth of nlevurb roof (m)
+    real(r8) :: z_roof_innerl(bounds%begl:bounds%endl)     ! node depth of nlevurb roof (m)
+    real(r8) :: zi_sunw_innerl(bounds%begl:bounds%endl)    ! interface depth of nlevurb sunwall (m)
+    real(r8) :: z_sunw_innerl(bounds%begl:bounds%endl)     ! node depth of nlevurb sunwall (m)
+    real(r8) :: zi_shdw_innerl(bounds%begl:bounds%endl)    ! interface depth of nlevurb shadewall (m)
+    real(r8) :: z_shdw_innerl(bounds%begl:bounds%endl)     ! node depth of nlevurb shadewall (m)
+    real(r8) :: t_roof_innerl_bef(bounds%begl:bounds%endl) ! roof temperature at nlevurb node depth at previous time step (K)
+    real(r8) :: t_sunw_innerl_bef(bounds%begl:bounds%endl) ! sunwall temperature at nlevurb node depth at previous time step (K)
+    real(r8) :: t_shdw_innerl_bef(bounds%begl:bounds%endl) ! shadewall temperature at nlevurb node depth at previous time step (K)
+    real(r8) :: t_roof_innerl(bounds%begl:bounds%endl)     ! roof temperature at nlevurb node depth (K)
+    real(r8) :: t_sunw_innerl(bounds%begl:bounds%endl)     ! sunwall temperature at nlevurb node depth (K)
+    real(r8) :: t_shdw_innerl(bounds%begl:bounds%endl)     ! shadewall temperature at nlevurb node depth (K)
+    real(r8) :: tk_roof_innerl(bounds%begl:bounds%endl)    ! roof thermal conductivity at nlevurb interface depth (W m-1 K-1)
+    real(r8) :: tk_sunw_innerl(bounds%begl:bounds%endl)    ! sunwall thermal conductivity at nlevurb interface depth (W m-1 K-1)
+    real(r8) :: tk_shdw_innerl(bounds%begl:bounds%endl)    ! shadewall thermal conductivity at nlevurb interface depth (W m-1 K-1)
+    real(r8) :: qrd_roof(bounds%begl:bounds%endl)          ! roof inside net longwave for energy balance check (W m-2)
+    real(r8) :: qrd_sunw(bounds%begl:bounds%endl)          ! sunwall inside net longwave for energy balance check (W m-2)
+    real(r8) :: qrd_shdw(bounds%begl:bounds%endl)          ! shadewall inside net longwave for energy balance check (W m-2)
+    real(r8) :: qrd_floor(bounds%begl:bounds%endl)         ! floor inside net longwave for energy balance check (W m-2)
+    real(r8) :: qrd_building(bounds%begl:bounds%endl)      ! building inside net longwave for energy balance check (W m-2)
+    real(r8) :: qcv_roof(bounds%begl:bounds%endl)          ! roof inside convection flux for energy balance check (W m-2)
+    real(r8) :: qcv_sunw(bounds%begl:bounds%endl)          ! sunwall inside convection flux for energy balance check (W m-2)
+    real(r8) :: qcv_shdw(bounds%begl:bounds%endl)          ! shadewall inside convection flux for energy balance check (W m-2)
+    real(r8) :: qcv_floor(bounds%begl:bounds%endl)         ! floor inside convection flux for energy balance check (W m-2)
+    real(r8) :: qcd_roof(bounds%begl:bounds%endl)          ! roof inside conduction flux for energy balance check (W m-2)
+    real(r8) :: qcd_sunw(bounds%begl:bounds%endl)          ! sunwall inside conduction flux for energy balance check (W m-2)
+    real(r8) :: qcd_shdw(bounds%begl:bounds%endl)          ! shadewall inside conduction flux for energy balance check (W m-2)
+    real(r8) :: qcd_floor(bounds%begl:bounds%endl)         ! floor inside conduction flux for energy balance check (W m-2)
+    real(r8) :: enrgy_bal_roof(bounds%begl:bounds%endl)    ! roof inside energy balance (W m-2)
+    real(r8) :: enrgy_bal_sunw(bounds%begl:bounds%endl)    ! sunwall inside energy balance (W m-2)
+    real(r8) :: enrgy_bal_shdw(bounds%begl:bounds%endl)    ! shadewall inside energy balance (W m-2)
+    real(r8) :: enrgy_bal_floor(bounds%begl:bounds%endl)   ! floor inside energy balance (W m-2)
+    real(r8) :: enrgy_bal_buildair(bounds%begl:bounds%endl)! building air energy balance (W m-2)
+    real(r8) :: sum                        ! sum of view factors for floor, wall, roof
+    integer  :: n                          ! number of linear equations (= neq)
+    integer  :: nrhs                       ! number of right hand sides (= 1) 
+    real(r8) :: a(neq,neq)                 ! n-by-n coefficient matrix a
+    integer  :: lda                        ! leading dimension of the matrix a
+    integer  :: ldb                        ! leading dimension of the matrix b
+    real(r8) :: result(neq)                ! on entry, the right hand side of matrix b
+                                           ! on exit, if info = 0, the n-by-nrhs solution matrix x
+    integer  :: info                       ! exit information for LAPACK routine dgesv
+    integer  :: ipiv(neq)                  ! the pivot indices that define the permutation matrix P
+    real(r8) :: q_building_max             ! maximum internal building air specific humidity determined from rh_building_max (kg/kg)
+    real(r8) :: qsat_building_max          ! maximum internal building air saturated specific humidity/mixing ratio used to determing q_building_max from rh_building_max (kg/kg)
+    real(r8) :: qsat_building              ! internal building air saturated specific humidity/mixing ratio used to calculate rh_building (kg/kg)
+    real(r8) :: esat_building              ! internal building air saturated vapor pressure used to calculate p_vapor (Pa)
+    real(r8) :: p_vapor                    ! internal building air partial pressure of water vapor (Pa)
+    real(r8) :: esatdT_building, qsatdT_building  !d(esat)/d(T) and d(qs)/d(T).  Only used as they are required outputs of QSat subroutine
+    real(r8) :: qtot_condensate(bounds%begl:bounds%endl) ! total condensed water due to dehumidification per building area (kg m-2)
+    real(r8) :: eflx_urban_ac_lat_derived(bounds%begl:bounds%endl) ! urban air conditioning latent heat flux derived from condensate output, for error check (W m-2)
+    real(r8) :: err_eflx_urban_ac_lat(bounds%begl:bounds%endl) ! Difference in urban air conditioning latent heat flux for error check (
+!EOP
+!-----------------------------------------------------------------------
+
+    ! Enforce expected array sizes
+    SHR_ASSERT_ALL_FL((ubound(tk)  == (/bounds%endc, nlevgrnd/)), sourcefile, __LINE__)
+
+    associate(&
+    clandunit         => col_pp%landunit                      , & ! Input:  [integer (:)]  column's landunit
+    ctype             => col_pp%itype                         , & ! Input:  [integer (:)]  column type
+    zi                => col_pp%zi                            , & ! Input:  [real(r8) (:,:)]  interface level below a "z" level (m)
+    z                 => col_pp%z                             , & ! Input:  [real(r8) (:,:)]  layer thickness (m)
+    forc_pbot         => atm2lnd_vars%forc_pbot_not_downscaled_grc, & ! Input: [real(r8) (:)]  atmospheric pressure (Pa)
+
+    ht_roof           => lun_pp%ht_roof                       , & ! Input:  [real(r8) (:)]  height of urban roof (m) 
+    canyon_hwr        => lun_pp%canyon_hwr                    , & ! Input:  [real(r8) (:)]  ratio of building height to street hwidth (-)
+    wtlunit_roof      => lun_pp%wtlunit_roof                  , & ! Input:  [real(r8) (:)]  weight of roof with respect to landunit
+    wtroad_perv       => lun_pp%wtroad_perv                   , & ! Input:  [real(r8) (:)]  weight of pervious road column to total road (-)
+    urbpoi            => lun_pp%urbpoi                        , & ! Input:  [logical (:)]  true => landunit is an urban point
+
+    taf               => lun_es%taf                        , & ! Input:  [real(r8) (:)]  urban canopy air temperature (K)
+    tssbef            => col_es%t_ssbef                    , & ! Input:  [real(r8) (:,:)]  temperature at previous time step (K)
+    t_soisno          => col_es%t_soisno                   , & ! Input:  [real(r8) (:,:)]  soil temperature (K)
+    t_roof_inner      => lun_es%t_roof_inner               , & ! InOut:  [real(r8) (:)]  roof inside surface temperature (K)
+    t_sunw_inner      => lun_es%t_sunw_inner               , & ! InOut:  [real(r8) (:)]  sunwall inside surface temperature (K)
+    t_shdw_inner      => lun_es%t_shdw_inner               , & ! InOut:  [real(r8) (:)]  shadewall inside surface temperature (K)
+    t_floor           => lun_es%t_floor                    , & ! InOut:  [real(r8) (:)]  floor temperature (K)
+    t_building        => lun_es%t_building                 , & ! InOut:  [real(r8) (:)]  internal building air temperature (K)
+    p_ac              => urbantv_vars%p_ac                 , & ! Input:  [real(r8) (:)]  air-conditioning penetration rate (a fraction between 0 and 1)  
+    t_building_max    => urbantv_vars%t_building_max       , & ! Input:  [real(r8) (:)]  maximum internal building air temperature (K)  
+    ! t_building_max    => urbanparams_vars%t_building_max   , & ! Input:  [real(r8) (:)]  maximum internal building air temperature (K) 
+    t_building_min    => urbanparams_vars%t_building_min   , & ! Input:  [real(r8) (:)]  minimum internal building air temperature (K)
+    qaf               => lun_ws%qaf        ,& ! Input: [real(r8) (:)]  urban canopy air specific humidity (kg/kg)
+    q_building        => lun_ws%q_building ,& ! InOut: [real(r8) (:)]  internal building air specific humidity (kg/kg)
+    rh_building       => lun_ws%rh_building,& ! InOut: [real(r8) (:)]  internal building air relative humidity (%)
+    eflx_building     => lun_ef%eflx_building , & ! Output:  [real(r8) (:)]  building heat flux from change in interior building air temperature (W/m**2)
+    eflx_urban_ac     => lun_ef%eflx_urban_ac , & ! Output:  [real(r8) (:)]  urban air conditioning flux (W/m**2)
+    eflx_urban_ac_sen => lun_ef%eflx_urban_ac_sen,& ! Output: [real(r8) (:)] sensible heat component of urban air conditioning flux (W/m**2)
+    eflx_urban_heat   => lun_ef%eflx_urban_heat, & ! Output:  [real(r8) (:)]  urban heating flux (W/m**2)
+    eflx_ventilation  => lun_ef%eflx_ventilation, & ! Output: [real(r8) (:)]  sensible heat flux from 
+    qflx_condensate_from_ac => col_wf%qflx_condensate_from_ac, & ! Output: [real(r8) (:)] condensed water flux due to dehumidification for impervious road area (mm/s)
+    qflx_condensate_from_ac_lu => lun_wf%qflx_condensate_from_ac & ! Output: [real(r8) (:)] condensed water flux due to dehumidification for urban area by land unit (mm/s)
+    )
+
+    ! Get step size
+
+    dtime = get_step_size_real()
+
+    ! 1. Save t_* at previous time step
+    ! 2. Set convective heat transfer coefficients (Bueno et al. 2012, GMD).
+    !    An alternative is Salamanca et al. 2010, TAC, where they are all set to 8 W m-2 K-1.
+    !    See elm_varcon.F90
+    ! 3. Set inner surface emissivities (Bueno et al. 2012, GMD).
+    ! 4. Set concrete floor properties (Salamanca et al. 2010, TAC).
+    ! 5. Calculate building height to building width ratio
+    do fl = 1,num_urbanl
+       l = filter_urbanl(fl)
+       g = lun_pp%gridcell(l)
+       if (urbpoi(l)) then
+         t_roof_inner_bef(l)  = t_roof_inner(l)
+         t_sunw_inner_bef(l)  = t_sunw_inner(l)
+         t_shdw_inner_bef(l)  = t_shdw_inner(l)
+         t_floor_bef(l)       = t_floor(l)
+         t_building_bef(l)    = t_building(l)
+         q_building_bef(l)    = q_building(l)
+         if (t_roof_inner_bef(l) .le. t_building_bef(l)) then
+           hcv_roofi(l) = hcv_roof_enhanced
+         else
+           hcv_roofi(l) = hcv_roof
+         end if
+         if (t_floor_bef(l) .ge. t_building_bef(l)) then
+           hcv_floori(l) = hcv_floor_enhanced
+         else
+           hcv_floori(l) = hcv_floor
+         end if
+         hcv_sunwi(l) = hcv_sunw
+         hcv_shdwi(l) = hcv_shdw
+         em_roofi(l)  = em_roof_int
+         em_sunwi(l)  = em_sunw_int
+         em_shdwi(l)  = em_shdw_int
+         em_floori(l) = em_floor_int
+         ! Concrete floor thickness (m)
+         dz_floori(l) = dz_floor
+         ! Concrete floor volumetric heat capacity (J m-3 K-1)
+         cp_floori(l) = cp_floor
+         ! Intermediate calculation for concrete floor (W m-2 K-1)
+         cv_floori(l) = (dz_floori(l) * cp_floori(l)) / dtime
+         ! Saturated vapor pressure at t_building (Pa)
+         call QSat(t_building_bef(l), forc_pbot(g), esat_building, esatdT_building,qsat_building, qsatdT_building )
+         ! Partial pressure of water vapor (Pa)
+         p_vapor = min(1._r8, q_building_bef(l) / qsat_building ) * esat_building
+         ! Density of HUMID air at bottom layer atmos. forcing pressure and t_building (kg m-3)
+         rho_hair(l) = ( forc_pbot(g) - p_vapor ) / ( rair * t_building_bef(l) ) + p_vapor / ( rwat * t_building_bef(l))
+         ! Specific heat capacity of HUMID air (J/kg/K)
+         cp_hair(l) = cpair + cpwvap * q_building_bef(l)
+         ! Building height to building width ratio
+         building_hwr(l) = canyon_hwr(l)*(1._r8-wtlunit_roof(l))/wtlunit_roof(l)
+       end if
+    end do
+
+    ! Get terms from soil temperature equations to compute conduction flux
+    ! Negative is toward surface - heat added
+    ! Note that the convection and conduction fluxes for the walls are in W m-2 wall area 
+    ! but for purposes of solving the set of simultaneous equations this must be converted to W m-2 
+    ! floor or roof area. This is done below when setting up the equation coefficients by multiplying by building_hwr.
+    ! Note also that the longwave radiation terms for the walls are in terms of W m-2 floor area since the view
+    ! factors implicitly convert from per unit wall area to per unit floor or roof area.
+
+    do fc = 1,num_nolakec
+       c = filter_nolakec(fc)
+       l = clandunit(c)
+       if (urbpoi(l)) then
+         if (ctype(c) == icol_roof) then
+           zi_roof_innerl(l) = zi(c,nlevurb)
+           z_roof_innerl(l) = z(c,nlevurb)
+           t_roof_innerl_bef(l) = tssbef(c,nlevurb)
+           t_roof_innerl(l) = t_soisno(c,nlevurb)
+           tk_roof_innerl(l) = tk(c,nlevurb)
+         else if (ctype(c) == icol_sunwall) then
+           zi_sunw_innerl(l) = zi(c,nlevurb)
+           z_sunw_innerl(l) = z(c,nlevurb)
+           t_sunw_innerl_bef(l) = tssbef(c,nlevurb)
+           t_sunw_innerl(l) = t_soisno(c,nlevurb)
+           tk_sunw_innerl(l) = tk(c,nlevurb)
+         else if (ctype(c) == icol_shadewall) then
+           zi_shdw_innerl(l) = zi(c,nlevurb)
+           z_shdw_innerl(l) = z(c,nlevurb)
+           t_shdw_innerl_bef(l) = tssbef(c,nlevurb)
+           t_shdw_innerl(l) = t_soisno(c,nlevurb)
+           tk_shdw_innerl(l) = tk(c,nlevurb)
+         end if
+       end if
+    end do
+
+    ! Calculate view factors
+    do fl = 1,num_urbanl
+       l = filter_urbanl(fl)
+       if (urbpoi(l)) then
+
+         vf_rf(l) = sqrt(1._r8 + building_hwr(l)**2._r8) - building_hwr(l)
+         vf_fr(l) = vf_rf(l)
+
+         ! This view factor implicitly converts from per unit wall area to per unit floor area
+         vf_wf(l)  = 0.5_r8*(1._r8 - vf_rf(l))
+
+         vf_fw(l) = vf_wf(l)
+
+         vf_rw(l)  = vf_fw(l)
+
+         ! This view factor implicitly converts from per unit wall area to per unit roof area
+         vf_wr(l)  = vf_wf(l)
+
+         vf_ww(l)  = 1._r8 - vf_rw(l) - vf_fw(l)
+
+      end if
+    end do
+
+    ! error check -- make sure view factor sums to one for floor, wall, and roof
+
+    do fl = 1,num_urbanl
+       l = filter_urbanl(fl)
+       if (urbpoi(l)) then
+
+         sum = vf_rf(l) + 2._r8*vf_wf(l)
+         if (abs(sum-1._r8) > 1.e-06_r8 ) then
+            write (iulog,*) 'urban floor view factor error',sum
+            write (iulog,*) 'elm model is stopping'
+            call endrun()
+         endif
+         sum = vf_rw(l) + vf_fw(l) + vf_ww(l)
+         if (abs(sum-1._r8) > 1.e-06_r8 ) then
+            write (iulog,*) 'urban wall view factor error',sum
+            write (iulog,*) 'elm model is stopping'
+            call endrun()
+         endif
+         sum = vf_fr(l) + vf_wr(l) + vf_wr(l)
+         if (abs(sum-1._r8) > 1.e-06_r8 ) then
+            write (iulog,*) 'urban roof view factor error',sum
+            write (iulog,*) 'elm model is stopping'
+            call endrun()
+         endif
+
+       endif
+    end do
+
+    n = neq
+    nrhs = 1
+    lda = neq
+    ldb = neq
+
+    do fl = 1,num_urbanl
+       l = filter_urbanl(fl)
+       if (urbpoi(l)) then
+
+         ! ROOF
+         a(1,1) =   0.5_r8*hcv_roofi(l) &
+                  + 0.5_r8*tk_roof_innerl(l)/(zi_roof_innerl(l) - z_roof_innerl(l)) &
+                  + 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8 &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(1._r8-em_shdwi(l))*vf_wr(l) &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rf(l)*(1._r8-em_floori(l))*vf_fr(l)
+
+         a(1,2) = - 4._r8*em_roofi(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wr(l) &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_ww(l)*(1._r8-em_shdwi(l))*vf_wr(l) &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fr(l)
+
+         a(1,3) = - 4._r8*em_roofi(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wr(l) &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_ww(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fr(l)
+
+         a(1,4) = - 4._r8*em_roofi(l)*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fr(l) &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(1._r8-em_shdwi(l))*vf_wr(l)
+
+         a(1,5) = - 0.5_r8*hcv_roofi(l)
+
+         result(1) =   0.5_r8*tk_roof_innerl(l)*t_roof_innerl(l)/(zi_roof_innerl(l) - z_roof_innerl(l)) &
+                     - 0.5_r8*tk_roof_innerl(l)*(t_roof_inner_bef(l)-t_roof_innerl_bef(l))/(zi_roof_innerl(l) &
+                     - z_roof_innerl(l)) &
+                     - 3._r8*em_roofi(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wr(l) &
+                     - 3._r8*em_roofi(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wr(l) &
+                     - 3._r8*em_roofi(l)*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fr(l) &
+                     + 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8 &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l)*(1._r8-em_shdwi(l))*vf_wr(l) &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rf(l)*(1._r8-em_floori(l))*vf_fr(l) &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_ww(l)*(1._r8-em_shdwi(l))*vf_wr(l) &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fr(l) &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_ww(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fr(l) &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l)*(1._r8-em_shdwi(l))*vf_wr(l) &
+                     - 0.5_r8*hcv_roofi(l)*(t_roof_inner_bef(l) - t_building_bef(l))
+
+         ! SUNWALL
+         a(2,1) = - 4._r8*em_sunwi(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l) &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(1._r8-em_shdwi(l))*vf_ww(l) &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rf(l)*(1._r8-em_floori(l))*vf_fw(l)
+
+         a(2,2) =   0.5_r8*hcv_sunwi(l)*building_hwr(l) &
+                  + 0.5_r8*tk_sunw_innerl(l)/(zi_sunw_innerl(l) - z_sunw_innerl(l))*building_hwr(l) &
+                  + 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8 &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_ww(l)*(1._r8-em_shdwi(l))*vf_ww(l) &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l)
+
+         a(2,3) = - 4._r8*em_sunwi(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_ww(l) &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l)
+
+         a(2,4) = - 4._r8*em_sunwi(l)*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l) &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(1._r8-em_shdwi(l))*vf_ww(l)
+         a(2,5) = - 0.5_r8*hcv_sunwi(l)*building_hwr(l)
+
+         result(2) =   0.5_r8*tk_sunw_innerl(l)*t_sunw_innerl(l)/(zi_sunw_innerl(l) - z_sunw_innerl(l))*building_hwr(l) &
+                     - 0.5_r8*tk_sunw_innerl(l)*(t_sunw_inner_bef(l)-t_sunw_innerl_bef(l))/(zi_sunw_innerl(l) &
+                     - z_sunw_innerl(l))*building_hwr(l) &
+                     - 3._r8*em_sunwi(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l) &
+                     - 3._r8*em_sunwi(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_ww(l) &
+                     - 3._r8*em_sunwi(l)*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l) &
+                     + 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8 &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_ww(l)*(1._r8-em_shdwi(l))*vf_ww(l) &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l)*(1._r8-em_shdwi(l))*vf_ww(l) &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l)*(1._r8-em_shdwi(l))*vf_ww(l) &
+                     - 0.5_r8*hcv_sunwi(l)*(t_sunw_inner_bef(l) - t_building_bef(l))*building_hwr(l)
+
+         ! SHADEWALL
+         a(3,1) = - 4._r8*em_shdwi(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l) &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(1._r8-em_sunwi(l))*vf_ww(l) &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rf(l)*(1._r8-em_floori(l))*vf_fw(l)
+
+         a(3,2) = - 4._r8*em_shdwi(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_ww(l) &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l)
+
+         a(3,3) =   0.5_r8*hcv_shdwi(l)*building_hwr(l) &
+                  + 0.5_r8*tk_shdw_innerl(l)/(zi_shdw_innerl(l) - z_shdw_innerl(l))*building_hwr(l) &
+                  + 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8 &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_ww(l)*(1._r8-em_sunwi(l))*vf_ww(l) &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l)
+
+         a(3,4) = - 4._r8*em_shdwi(l)*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l) &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(1._r8-em_sunwi(l))*vf_ww(l)
+
+         a(3,5) = - 0.5_r8*hcv_shdwi(l)*building_hwr(l)
+
+         result(3) =   0.5_r8*tk_shdw_innerl(l)*t_shdw_innerl(l)/(zi_shdw_innerl(l) - z_shdw_innerl(l))*building_hwr(l) &
+                     - 0.5_r8*tk_shdw_innerl(l)*(t_shdw_inner_bef(l)-t_shdw_innerl_bef(l))/(zi_shdw_innerl(l) &
+                     - z_shdw_innerl(l))*building_hwr(l) &
+                     - 3._r8*em_shdwi(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l) &
+                     - 3._r8*em_shdwi(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_ww(l) &
+                     - 3._r8*em_shdwi(l)*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l) &
+                     + 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8 &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_ww(l)*(1._r8-em_sunwi(l))*vf_ww(l) &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l)*(1._r8-em_sunwi(l))*vf_ww(l) &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l)*(1._r8-em_sunwi(l))*vf_ww(l) &
+                     - 0.5_r8*hcv_shdwi(l)*(t_shdw_inner_bef(l) - t_building_bef(l))*building_hwr(l)
+
+         ! FLOOR
+         a(4,1) = - 4._r8*em_floori(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rf(l) &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(1._r8-em_sunwi(l))*vf_wf(l) &
+                  - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(1._r8-em_shdwi(l))*vf_wf(l)
+
+         a(4,2) = - 4._r8*em_floori(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wf(l) &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_ww(l)*(1._r8-em_shdwi(l))*vf_wf(l) &
+                  - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rf(l)
+
+         a(4,3) = - 4._r8*em_floori(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wf(l) &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rf(l) &
+                  - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_ww(l)*(1._r8-em_sunwi(l))*vf_wf(l)
+
+         a(4,4) =   (cv_floori(l) + 0.5_r8*hcv_floori(l)) &
+                  + 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8 &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fr(l)*(1._r8-em_roofi(l))*vf_rf(l) &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(1._r8-em_sunwi(l))*vf_wf(l) &
+                  - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(1._r8-em_shdwi(l))*vf_wf(l)
+
+         a(4,5) = - 0.5_r8*hcv_floori(l)
+
+         result(4) =   cv_floori(l)*t_floor_bef(l) &
+                     - 3._r8*em_floori(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rf(l) &
+                     - 3._r8*em_floori(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wf(l) &
+                     - 3._r8*em_floori(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wf(l) &
+                     + 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8 &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fr(l)*(1._r8-em_roofi(l))*vf_rf(l) &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l)*(1._r8-em_sunwi(l))*vf_wf(l) &
+                     - 3._r8*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l)*(1._r8-em_shdwi(l))*vf_wf(l) &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_ww(l)*(1._r8-em_shdwi(l))*vf_wf(l) &
+                     - 3._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rf(l) &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wr(l)*(1._r8-em_roofi(l))*vf_rf(l) &
+                     - 3._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_ww(l)*(1._r8-em_sunwi(l))*vf_wf(l) &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l)*(1._r8-em_sunwi(l))*vf_wf(l) &
+                     - 3._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l)*(1._r8-em_shdwi(l))*vf_wf(l) &
+                     - 0.5_r8*hcv_floori(l)*(t_floor_bef(l) - t_building_bef(l))
+
+         ! Building air temperature
+         a(5,1) = - 0.5_r8*hcv_roofi(l)
+         a(5,2) = - 0.5_r8*hcv_sunwi(l)*building_hwr(l)
+
+         a(5,3) = - 0.5_r8*hcv_shdwi(l)*building_hwr(l)
+
+         a(5,4) = - 0.5_r8*hcv_floori(l)
+
+         a(5,5) =  ((ht_roof(l)*rho_hair(l)*cp_hair(l))/dtime) + &
+                   ((ht_roof(l)*vent_ach)/3600._r8)*rho_hair(l)*cp_hair(l) + &
+                   0.5_r8*hcv_roofi(l) + &
+                   0.5_r8*hcv_sunwi(l)*building_hwr(l) + &
+                   0.5_r8*hcv_shdwi(l)*building_hwr(l) + &
+                   0.5_r8*hcv_floori(l)
+
+         result(5) = (ht_roof(l)*rho_hair(l)*cp_hair(l)/dtime)*t_building_bef(l) &
+                      + ((ht_roof(l)*vent_ach)/3600._r8)*rho_hair(l)*cp_hair(l)*taf(l) &
+                      + 0.5_r8*hcv_roofi(l)*(t_roof_inner_bef(l) - t_building_bef(l)) &
+                      + 0.5_r8*hcv_sunwi(l)*(t_sunw_inner_bef(l) - t_building_bef(l))*building_hwr(l) &
+                      + 0.5_r8*hcv_shdwi(l)*(t_shdw_inner_bef(l) - t_building_bef(l))*building_hwr(l) &
+                      + 0.5_r8*hcv_floori(l)*(t_floor_bef(l) - t_building_bef(l))
+
+         ! Solve equations
+         call dgesv(n, nrhs, a, lda, ipiv, result, ldb, info)
+
+         ! If dgesv fails, abort 
+         if (info /= 0) then
+           write(iulog,*)'fl: ',fl
+           write(iulog,*)'l: ',l
+           write(iulog,*)'dgesv info: ',info
+           write (iulog,*) 'dgesv error'
+           write (iulog,*) 'elm model is stopping'
+           call endrun()
+         end if
+         ! Assign new temperatures
+         t_roof_inner(l)  = result(1)
+         t_sunw_inner(l)  = result(2)
+         t_shdw_inner(l)  = result(3)
+         t_floor(l) = result(4)
+         t_building(l)    = result(5)
+       end if
+    end do
+
+    ! Update internal building air specific humidity
+    do fl = 1,num_urbanl
+       l = filter_urbanl(fl)
+       if (urbpoi(l)) then
+          q_building(l) = qaf(l) * (vent_ach/3600._r8 * dtime) + q_building_bef(l) * (1 - vent_ach/3600._r8 * dtime)
+       end if
+    end do
+
+    ! Energy balance checks
+    do fl = 1,num_urbanl
+       l = filter_urbanl(fl)
+       if (urbpoi(l)) then
+         qrd_roof(l) = - em_roofi(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wr(l) &
+                       - 4._r8*em_roofi(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wr(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - em_roofi(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wr(l) &
+                       - 4._r8*em_roofi(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wr(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - em_roofi(l)*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fr(l) &
+                       - 4._r8*em_roofi(l)*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fr(l)*(t_floor(l) - t_floor_bef(l)) &
+                       - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rw(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                       - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(1._r8-em_sunwi(l))*vf_wr(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rw(l)*(1._r8-em_shdwi(l))*vf_wr(l) &
+                       - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(1._r8-em_shdwi(l))*vf_wr(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rf(l)*(1._r8-em_floori(l))*vf_fr(l) &
+                       - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rf(l)*(1._r8-em_floori(l))*vf_fr(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_ww(l)*(1._r8-em_shdwi(l))*vf_wr(l) &
+                       - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_ww(l)*(1._r8-em_shdwi(l))*vf_wr(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_wf(l)*(1._r8-em_floori(l))*vf_fr(l) &
+                       - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fr(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_ww(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                       - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_ww(l)*(1._r8-em_sunwi(l))*vf_wr(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_wf(l)*(1._r8-em_floori(l))*vf_fr(l) &
+                       - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wf(l)*(1._r8-em_floori(l))*vf_fr(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fw(l)*(1._r8-em_sunwi(l))*vf_wr(l) &
+                       - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(1._r8-em_sunwi(l))*vf_wr(l)*(t_floor(l) &
+                       - t_floor_bef(l)) &
+                       - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fw(l)*(1._r8-em_shdwi(l))*vf_wr(l) &
+                       - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(1._r8-em_shdwi(l))*vf_wr(l)*(t_floor(l) &
+                       - t_floor_bef(l)) &
+                       + em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8 &
+                       + 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*(t_roof_inner(l) - t_roof_inner_bef(l)) 
+
+         qrd_sunw(l) = - em_sunwi(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l) &
+                       - 4._r8*em_sunwi(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - em_sunwi(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_ww(l)  &
+                       - 4._r8*em_sunwi(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_ww(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - em_sunwi(l)*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l) &
+                       - 4._r8*em_sunwi(l)*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(t_floor(l) - t_floor_bef(l)) &
+                       - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                       - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3.*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_ww(l)*(1._r8-em_shdwi(l))*vf_ww(l) &
+                       - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3.*vf_ww(l)*(1._r8-em_shdwi(l))*vf_ww(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                       - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3.*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                       - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3.*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                       - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3.*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rw(l)*(1._r8-em_shdwi(l))*vf_ww(l) &
+                       - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3.*vf_rw(l)*(1._r8-em_shdwi(l))*vf_ww(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                       - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3.*vf_rf(l)*(1._r8-em_floori(l))*vf_fw(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                       - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3.*vf_fr(l)*(1._r8-em_roofi(l))*vf_rw(l)*(t_floor(l) &
+                       - t_floor_bef(l)) &
+                       - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fw(l)*(1._r8-em_shdwi(l))*vf_ww(l) &
+                       - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3.*vf_fw(l)*(1._r8-em_shdwi(l))*vf_ww(l)*(t_floor(l) &
+                       - t_floor_bef(l)) &
+                       + em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8 &
+                       + 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*(t_sunw_inner(l) - t_sunw_inner_bef(l))
+
+         qrd_shdw(l) = - em_shdwi(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rw(l) &
+                       - 4._r8*em_shdwi(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rw(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - em_shdwi(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_ww(l) &
+                       - 4._r8*em_shdwi(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_ww(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - em_shdwi(l)*em_floori(l)*sb*t_floor_bef(l)**4._r8*vf_fw(l) &
+                       - 4._r8*em_shdwi(l)*em_floori(l)*sb*t_floor_bef(l)**3._r8*vf_fw(l)*(t_floor(l) - t_floor_bef(l)) &
+                       - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                       - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3.*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_ww(l)*(1._r8-em_sunwi(l))*vf_ww(l) &
+                       - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3.*vf_ww(l)*(1._r8-em_sunwi(l))*vf_ww(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                       - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3.*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l)*(t_shdw_inner(l) &
+                       - t_shdw_inner_bef(l)) &
+                       - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                       - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3.*vf_wf(l)*(1._r8-em_floori(l))*vf_fw(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                       - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3.*vf_wr(l)*(1._r8-em_roofi(l))*vf_rw(l)*(t_sunw_inner(l) &
+                       - t_sunw_inner_bef(l)) &
+                       - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rw(l)*(1._r8-em_sunwi(l))*vf_ww(l) &
+                       - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3.*vf_rw(l)*(1._r8-em_sunwi(l))*vf_ww(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rf(l)*(1._r8-em_floori(l))*vf_fw(l) &
+                       - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3.*vf_rf(l)*(1._r8-em_floori(l))*vf_fw(l)*(t_roof_inner(l) &
+                       - t_roof_inner_bef(l)) &
+                       - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fr(l)*(1._r8-em_roofi(l))*vf_rw(l) &
+                       - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3.*vf_fr(l)*(1._r8-em_roofi(l))*vf_rw(l)*(t_floor(l) &
+                       - t_floor_bef(l)) &
+                       - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fw(l)*(1._r8-em_sunwi(l))*vf_ww(l) &
+                       - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3.*vf_fw(l)*(1._r8-em_sunwi(l))*vf_ww(l)*(t_floor(l) &
+                       - t_floor_bef(l)) &
+                       + em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8 &
+                       + 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*(t_shdw_inner(l) - t_shdw_inner_bef(l))
+
+         qrd_floor(l) = - em_floori(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8*vf_rf(l) &
+                        - 4._r8*em_floori(l)*em_roofi(l)*sb*t_roof_inner_bef(l)**3._r8*vf_rf(l)*(t_roof_inner(l) &
+                        - t_roof_inner_bef(l)) &
+                        - em_floori(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8*vf_wf(l) &
+                        - 4._r8*em_floori(l)*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3._r8*vf_wf(l)*(t_sunw_inner(l) &
+                        - t_sunw_inner_bef(l)) &
+                        - em_floori(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8*vf_wf(l) &
+                        - 4._r8*em_floori(l)*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3._r8*vf_wf(l)*(t_shdw_inner(l) &
+                        - t_shdw_inner_bef(l)) &
+                        - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fr(l)*(1._r8-em_roofi(l))*vf_rf(l) &
+                        - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3.*vf_fr(l)*(1._r8-em_roofi(l))*vf_rf(l)*(t_floor(l) &
+                        - t_floor_bef(l)) &
+                        - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fw(l)*(1._r8-em_sunwi(l))*vf_wf(l) &
+                        - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3.*vf_fw(l)*(1._r8-em_sunwi(l))*vf_wf(l)*(t_floor(l) &
+                        - t_floor_bef(l)) &
+                        - (em_floori(l)*sb*t_floor_bef(l)**4._r8)*vf_fw(l)*(1._r8-em_shdwi(l))*vf_wf(l) &
+                        - 4._r8*em_floori(l)*sb*t_floor_bef(l)**3.*vf_fw(l)*(1._r8-em_shdwi(l))*vf_wf(l)*(t_floor(l) &
+                        - t_floor_bef(l)) &
+                        - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_ww(l)*(1._r8-em_shdwi(l))*vf_wf(l) &
+                        - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3.*vf_ww(l)*(1._r8-em_shdwi(l))*vf_wf(l)*(t_sunw_inner(l) &
+                        - t_sunw_inner_bef(l)) &
+                        - (em_sunwi(l)*sb*t_sunw_inner_bef(l)**4._r8)*vf_wr(l)*(1._r8-em_roofi(l))*vf_rf(l) &
+                        - 4._r8*em_sunwi(l)*sb*t_sunw_inner_bef(l)**3.*vf_wr(l)*(1._r8-em_roofi(l))*vf_rf(l)*(t_sunw_inner(l) &
+                        - t_sunw_inner_bef(l)) &
+                        - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_wr(l)*(1._r8-em_roofi(l))*vf_rf(l) &
+                        - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3.*vf_wr(l)*(1._r8-em_roofi(l))*vf_rf(l)*(t_shdw_inner(l) &
+                        - t_shdw_inner_bef(l)) &
+                        - (em_shdwi(l)*sb*t_shdw_inner_bef(l)**4._r8)*vf_ww(l)*(1._r8-em_sunwi(l))*vf_wf(l) &
+                        - 4._r8*em_shdwi(l)*sb*t_shdw_inner_bef(l)**3.*vf_ww(l)*(1._r8-em_sunwi(l))*vf_wf(l)*(t_shdw_inner(l) &
+                        - t_shdw_inner_bef(l)) &
+                        - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rw(l)*(1._r8-em_sunwi(l))*vf_wf(l) &
+                        - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3.*vf_rw(l)*(1._r8-em_sunwi(l))*vf_wf(l)*(t_roof_inner(l) &
+                        - t_roof_inner_bef(l)) &
+                        - (em_roofi(l)*sb*t_roof_inner_bef(l)**4._r8)*vf_rw(l)*(1._r8-em_shdwi(l))*vf_wf(l) &
+                        - 4._r8*em_roofi(l)*sb*t_roof_inner_bef(l)**3.*vf_rw(l)*(1._r8-em_shdwi(l))*vf_wf(l)*(t_roof_inner(l) &
+                        - t_roof_inner_bef(l)) &
+                        + em_floori(l)*sb*t_floor_bef(l)**4._r8 &
+                        + 4._r8*em_floori(l)*sb*t_floor_bef(l)**3.*(t_floor(l) - t_floor_bef(l))
+
+         qrd_building(l) = qrd_roof(l) + qrd_sunw(l) + qrd_shdw(l) + qrd_floor(l)
+
+         if (abs(qrd_building(l)) > .10_r8 ) then
+           write (iulog,*) 'urban inside building net longwave radiation balance error ',qrd_building(l)
+           write (iulog,*) 'elm model is stopping'
+           call endrun()
+         end if
+
+         qcv_roof(l) = 0.5_r8*hcv_roofi(l)*(t_roof_inner(l) - t_building(l)) + 0.5_r8*hcv_roofi(l)*(t_roof_inner_bef(l) &
+                       - t_building_bef(l))
+         qcd_roof(l) = 0.5_r8*tk_roof_innerl(l)*(t_roof_inner(l) - t_roof_innerl(l))/(zi_roof_innerl(l) - z_roof_innerl(l))  &
+                       + 0.5_r8*tk_roof_innerl(l)*(t_roof_inner_bef(l) - t_roof_innerl_bef(l))/(zi_roof_innerl(l) &
+                       - z_roof_innerl(l))
+         enrgy_bal_roof(l) = qrd_roof(l) + qcv_roof(l) + qcd_roof(l)
+         if (abs(enrgy_bal_roof(l)) > .10_r8 ) then
+           write (iulog,*) 'urban inside roof energy balance error ',enrgy_bal_roof(l)
+           write (iulog,*) 'elm model is stopping'
+           call endrun()
+         end if
+
+         qcv_sunw(l) = 0.5_r8*hcv_sunwi(l)*(t_sunw_inner(l) - t_building(l)) + 0.5_r8*hcv_sunwi(l)*(t_sunw_inner_bef(l) &
+                       - t_building_bef(l))
+         qcd_sunw(l) = 0.5_r8*tk_sunw_innerl(l)*(t_sunw_inner(l) - t_sunw_innerl(l))/(zi_sunw_innerl(l) - z_sunw_innerl(l))  &
+                       + 0.5_r8*tk_sunw_innerl(l)*(t_sunw_inner_bef(l) - t_sunw_innerl_bef(l))/(zi_sunw_innerl(l) &
+                       - z_sunw_innerl(l))
+         enrgy_bal_sunw(l) = qrd_sunw(l) + qcv_sunw(l)*building_hwr(l) + qcd_sunw(l)*building_hwr(l)
+         if (abs(enrgy_bal_sunw(l)) > .10_r8 ) then
+           write (iulog,*) 'urban inside sunwall energy balance error ',enrgy_bal_sunw(l)
+           write (iulog,*) 'elm model is stopping'
+           call endrun()
+         end if
+
+         qcv_shdw(l) = 0.5_r8*hcv_shdwi(l)*(t_shdw_inner(l) - t_building(l)) + 0.5_r8*hcv_shdwi(l)*(t_shdw_inner_bef(l) &
+                       - t_building_bef(l))
+         qcd_shdw(l) = 0.5_r8*tk_shdw_innerl(l)*(t_shdw_inner(l) - t_shdw_innerl(l))/(zi_shdw_innerl(l) - z_shdw_innerl(l))  &
+                       + 0.5_r8*tk_shdw_innerl(l)*(t_shdw_inner_bef(l) - t_shdw_innerl_bef(l))/(zi_shdw_innerl(l) &
+                       - z_shdw_innerl(l))
+         enrgy_bal_shdw(l) = qrd_shdw(l) + qcv_shdw(l)*building_hwr(l) + qcd_shdw(l)*building_hwr(l)
+         if (abs(enrgy_bal_shdw(l)) > .10_r8 ) then
+           write (iulog,*) 'urban inside shadewall energy balance error ',enrgy_bal_shdw(l)
+           write (iulog,*) 'elm model is stopping'
+           call endrun()
+         end if
+
+         qcv_floor(l) = 0.5_r8*hcv_floori(l)*(t_floor(l) - t_building(l)) + 0.5_r8*hcv_floori(l)*(t_floor_bef(l) &
+                        - t_building_bef(l))
+         qcd_floor(l) = cv_floori(l)*(t_floor(l) - t_floor_bef(l))
+         enrgy_bal_floor(l) = qrd_floor(l) + qcv_floor(l) + qcd_floor(l)
+         if (abs(enrgy_bal_floor(l)) > .10_r8 ) then
+           write (iulog,*) 'urban inside floor energy balance error ',enrgy_bal_floor(l)
+           write (iulog,*) 'elm model is stopping'
+           call endrun()
+         end if
+
+         enrgy_bal_buildair(l) = (ht_roof(l)*rho_hair(l)*cp_hair(l)/dtime)*(t_building(l) - t_building_bef(l)) &
+                                 - ht_roof(l)*(vent_ach/3600._r8)*rho_hair(l)*cp_hair(l)*(taf(l) - t_building(l)) &
+                                 - 0.5_r8*hcv_roofi(l)*(t_roof_inner(l) - t_building(l)) &
+                                 - 0.5_r8*hcv_roofi(l)*(t_roof_inner_bef(l) - t_building_bef(l)) &
+                                 - 0.5_r8*hcv_sunwi(l)*(t_sunw_inner(l) - t_building(l))*building_hwr(l) &
+                                 - 0.5_r8*hcv_sunwi(l)*(t_sunw_inner_bef(l) - t_building_bef(l))*building_hwr(l) &
+                                 - 0.5_r8*hcv_shdwi(l)*(t_shdw_inner(l) - t_building(l))*building_hwr(l) &
+                                 - 0.5_r8*hcv_shdwi(l)*(t_shdw_inner_bef(l) - t_building_bef(l))*building_hwr(l) &
+                                 - 0.5_r8*hcv_floori(l)*(t_floor(l) - t_building(l)) &
+                                 - 0.5_r8*hcv_floori(l)*(t_floor_bef(l) - t_building_bef(l))
+         if (abs(enrgy_bal_buildair(l)) > .10_r8 ) then
+           write (iulog,*) 'urban building air energy balance error ',enrgy_bal_buildair(l)
+           write (iulog,*) 'elm model is stopping'
+           call endrun()
+         end if
+
+         
+         ! Sensible heat flux from ventilation. It is added as a flux to the canyon floor in SoilTemperatureMod.
+         ! Note that we multiply it here by wtlunit_roof which converts it from W/m2 of building area to W/m2
+         ! of urban area. eflx_urban_ac and eflx_urban_heat are treated similarly below. This flux is balanced
+         ! by an equal and opposite flux into/out of the building and so has a net effect of zero on the energy balance
+         ! of the urban landunit.
+         eflx_ventilation(l) = wtlunit_roof(l) * ( &
+                               - ht_roof(l) * (vent_ach/3600._r8) * rho_hair(l) * cp_hair(l) * (taf(l) - t_building(l)) &
+                               - ht_roof(l) * (vent_ach/3600._r8) * rho_hair(l) * hvap * (qaf(l) - q_building(l)) &
+                               )
+       end if
+    end do
+
+    ! Restrict internal building air temperature to between min and max
+    ! Calculate heating or air conditioning flux from energy required to change
+    ! internal building air temperature to t_building_min or t_building_max. 
+
+    do fl = 1,num_urbanl
+       l = filter_urbanl(fl)
+       g = lun_pp%gridcell(l)
+       if (urbpoi(l)) then
+          if (trim(urban_hac) == urban_hac_on .or. trim(urban_hac) == urban_wasteheat_on) then
+            t_building_bef_hac(l) = t_building(l)
+            q_building_bef_hac(l) = q_building(l)
+
+            ! Calculate q setpoint from RH setpoint
+            call QSat(t_building_bef_hac(l), forc_pbot(g), esat_building, esatdT_building,qsat_building_max, qsatdT_building )
+            q_building_max = rh_building_max / 100._r8 * qsat_building_max
+            
+            if (t_building_bef_hac(l) > t_building_max(l)) then
+              if (urban_explicit_ac) then   ! use explicit ac adoption rate parameterization scheme:
+                ! Sensible heat
+                ! Here, t_building_max is the AC saturation setpoint
+                eflx_urban_ac_sat(l) = wtlunit_roof(l) * abs( (ht_roof(l) * rho_hair(l) * cp_hair(l) / dtime) * t_building_max(l) &
+                                     - (ht_roof(l) * rho_hair(l) * cp_hair(l) / dtime) * t_building_bef_hac(l) )
+                t_building(l) = t_building_max(l) + ( 1._r8 - p_ac(l) ) * eflx_urban_ac_sat(l) &
+                              * dtime / (ht_roof(l) * rho_hair(l) * cp_hair(l) * wtlunit_roof(l))
+                eflx_urban_ac_sen(l) = p_ac(l) * eflx_urban_ac_sat(l)
+
+                ! Latent heat
+                if (q_building_bef_hac(l) > q_building_max) then
+                  ! the latent heat removed from internal building air is released to urban canyon as sensible heat.
+                  ! Humidification process for urban heating is not implemented.
+                  ! Here, q_building_max is the AC humidity setpoint under saturated adoption
+                  eflx_urban_ac_sat_lat(l) = wtlunit_roof(l) * abs( &
+                                             (ht_roof(l) * rho_hair(l) * hvap / dtime) * q_building_max &
+                                             - (ht_roof(l) * rho_hair(l) * hvap / dtime) * q_building_bef_hac(l) &
+                                             )
+                  eflx_urban_ac_sat(l) = eflx_urban_ac_sat(l) + eflx_urban_ac_sat_lat(l)
+                  q_building(l) = q_building_max + ( 1._r8 - p_ac(l) ) * eflx_urban_ac_sat_lat(l) &
+                              * dtime / (ht_roof(l) * rho_hair(l) * hvap * wtlunit_roof(l))
+
+                end if
+
+                eflx_urban_ac(l) = p_ac(l) * eflx_urban_ac_sat(l)
+              else
+                t_building(l) = t_building_max(l)
+                eflx_urban_ac_sen(l) = wtlunit_roof(l) * abs( (ht_roof(l) * rho_hair(l) * cp_hair(l) / dtime) * t_building(l) &
+                                   - (ht_roof(l) * rho_hair(l) * cp_hair(l) / dtime) * t_building_bef_hac(l) )
+                eflx_urban_ac(l) = eflx_urban_ac_sen(l) + 0._r8 ! 0._r8 is a placeholder for eflx_urban_ac_lat(l)
+              end if
+            
+            else if (t_building_bef_hac(l) < t_building_min(l)) then
+              t_building(l) = t_building_min(l)
+              eflx_urban_heat(l) = wtlunit_roof(l) * abs( (ht_roof(l) * rho_hair(l) * cp_hair(l) / dtime) * t_building(l) &
+                                   - (ht_roof(l) * rho_hair(l) * cp_hair(l) / dtime) * t_building_bef_hac(l) )
+            else
+              eflx_urban_ac_sen(l) = 0._r8
+              eflx_urban_ac(l) = 0._r8
+              eflx_urban_heat(l) = 0._r8
+            end if
+          else
+            eflx_urban_ac_sen(l) = 0._r8
+            eflx_urban_ac(l) = 0._r8
+            eflx_urban_heat(l) = 0._r8
+          end if
+  
+
+          eflx_building(l) = wtlunit_roof(l) * ( &
+                             (ht_roof(l) * rho_hair(l)*cp_hair(l)/dtime) * (t_building(l) - t_building_bef(l)) &
+                             + (ht_roof(l) * rho_hair(l)*hvap/dtime) * (q_building(l) - q_building_bef(l)) &
+                             )
+
+          ! Calculate total water condensed by dehumidification, if any [kg/m2 building area].
+          qtot_condensate(l) = max(0._r8, (-q_building(l)+q_building_bef_hac(l))) * ht_roof(l) * rho_hair(l)
+          ! condensate water flux [mm/s] w.r.t. urban land unit area
+          qflx_condensate_from_ac_lu(l) = wtlunit_roof(l) * qtot_condensate(l) / dtime
+
+          ! Calculate relative humidity based on specific humidity
+          call QSat(t_building(l), forc_pbot(g),  esat_building, esatdT_building,qsat_building, qsatdT_building )
+          rh_building(l) = min(100._r8, q_building(l) / qsat_building * 100._r8)
+
+        end if
+    end do
+
+
+    ! The following code block checks if the energy and water calculations from the dehumidification scheme match
+    do fl = 1,num_urbanl
+       l = filter_urbanl(fl)
+       if (urbpoi(l)) then
+          ! dehumidification energy flux calculated from condensate:
+          eflx_urban_ac_lat_derived(l) = qflx_condensate_from_ac_lu(l) * hvap
+          ! Difference in dehumidification energy flux:
+          err_eflx_urban_ac_lat(l) = eflx_urban_ac_lat_derived(l) - (eflx_urban_ac(l) - eflx_urban_ac_sen(l))
+          if (abs(err_eflx_urban_ac_lat(l)) > 1.e-5_r8 ) then
+             write (iulog,*) 'urban dehumidification energy does not match condensate output,' 
+             write (iulog,*) 'error in dehumidification energy flux [W/m2 urban]: ',err_eflx_urban_ac_lat(l)
+             write (iulog,*) 'elm model is stopping'
+             call endrun()
+          end if
+       end if
+    end do
+
+    ! Assume all condensed water gets added to the roof column (that goes directly into surface runoff)
+    ! Calculate and assign water flux due to dehumidification to roof column [mm/s],
+    ! water flux to other urban columns are set to 0.
+    do fc = 1,num_urbanc
+       c = filter_urbanc(fc)
+       l = clandunit(c)
+       if (urbpoi(l)) then
+         if (ctype(c) == icol_roof) then
+           qflx_condensate_from_ac(c) = qtot_condensate(l)/dtime
+         else
+           qflx_condensate_from_ac(c) = 0._r8
+         end if
+       end if
+    end do
+
+    end associate 
+  end subroutine BuildingTemperature
+
+  !-----------------------------------------------------------------------
+
+end module UrbBuildTempOleson2015Mod

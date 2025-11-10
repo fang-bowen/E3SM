@@ -470,6 +470,7 @@ module ColumnDataType
     real(r8), pointer :: qflx_evap_can        (:)   => null() ! evaporation from leaves and stems (mm H2O/s) (+ = to atm)
     real(r8), pointer :: qflx_evap_tot        (:)   => null() ! col_qflx_evap_soi + col_qflx_evap_veg + qflx_tran_veg
     real(r8), pointer :: qflx_evap_grnd       (:)   => null() ! ground surface evaporation rate (mm H2O/s) [+]
+    real(r8), pointer :: qflx_condensate_from_ac(:) => null() ! condensate due to dehumidification from air-conditioning (mm H2O/S) [+]
     real(r8), pointer :: qflx_snwcp_liq       (:)   => null() ! excess rainfall due to snow capping (mm H2O /s)
     real(r8), pointer :: qflx_snwcp_ice       (:)   => null() ! excess snowfall due to snow capping (mm H2O /s)
     real(r8), pointer :: qflx_ice_runoff_xs   (:)   => null() ! solid runoff from excess ice in soil (mm H2O /s) [+]
@@ -547,6 +548,8 @@ module ColumnDataType
     real(r8), pointer :: mflx_et              (:,:) => null() ! evapotranspiration sink from all soil coontrol volumes (kg H2O /s)
     real(r8), pointer :: mflx_drain           (:,:) => null() ! drainage from groundwater table (kg H2O /s)
     real(r8), pointer :: mflx_recharge        (:)   => null() ! recharge from soil column to unconfined aquifer (kg H2O /s)
+
+    
 
   contains
     procedure, public :: Init    => col_wf_init
@@ -5621,11 +5624,13 @@ contains
   !------------------------------------------------------------------------
   ! Subroutines to initialize and clean column energy flux data structure
   !------------------------------------------------------------------------
-  subroutine col_ef_init(this, begc, endc)
+  subroutine col_ef_init(this, begc, endc, is_simple_buildtemp)
     !
     ! !ARGUMENTS:
     class(column_energy_flux) :: this
     integer, intent(in) :: begc,endc
+    logical, intent(in) :: is_simple_buildtemp  ! Simple building temp is being used
+
     ! !LOCAL VARIABLES:
     integer  :: l,c
     !-----------------------------------------------------------------------
@@ -5680,20 +5685,22 @@ contains
           avgflag='A', long_name='Urban snow melt heat flux', &
            ptr_col=this%eflx_snomelt_u, c2l_scale_type='urbanf', set_nourb=spval)
 
-    this%eflx_building_heat(begc:endc) = spval
-     call hist_addfld1d (fname='BUILDHEAT', units='W/m^2',  &
-          avgflag='A', long_name='heat flux from urban building interior to walls and roof', &
-           ptr_col=this%eflx_building_heat, set_nourb=0._r8, c2l_scale_type='urbanf')
+    if (is_simple_buildtemp) then
+      this%eflx_building_heat(begc:endc) = spval
+      call hist_addfld1d (fname='BUILDHEAT', units='W/m^2',  &
+            avgflag='A', long_name='heat flux from urban building interior to walls and roof', &
+            ptr_col=this%eflx_building_heat, set_nourb=0._r8, c2l_scale_type='urbanf')
 
-    this%eflx_urban_ac(begc:endc) = spval
-     call hist_addfld1d (fname='URBAN_AC', units='W/m^2',  &
-          avgflag='A', long_name='urban air conditioning flux', &
-           ptr_col=this%eflx_urban_ac, set_nourb=0._r8, c2l_scale_type='urbanf')
+      this%eflx_urban_ac(begc:endc) = spval
+      call hist_addfld1d (fname='URBAN_AC', units='W/m^2',  &
+            avgflag='A', long_name='urban air conditioning flux', &
+            ptr_col=this%eflx_urban_ac, set_nourb=0._r8, c2l_scale_type='urbanf')
 
-    this%eflx_urban_heat(begc:endc) = spval
-     call hist_addfld1d (fname='URBAN_HEAT', units='W/m^2',  &
-          avgflag='A', long_name='urban heating flux', &
-           ptr_col=this%eflx_urban_heat, set_nourb=0._r8, c2l_scale_type='urbanf')
+      this%eflx_urban_heat(begc:endc) = spval
+      call hist_addfld1d (fname='URBAN_HEAT', units='W/m^2',  &
+            avgflag='A', long_name='urban heating flux', &
+            ptr_col=this%eflx_urban_heat, set_nourb=0._r8, c2l_scale_type='urbanf')
+    end if
 
     this%eflx_fgr12(begc:endc) = spval
      call hist_addfld1d (fname='FGR12',  units='W/m^2',  &
@@ -5729,7 +5736,7 @@ contains
   end subroutine col_ef_init
 
   !------------------------------------------------------------------------
-  subroutine col_ef_restart(this, bounds, ncid, flag)
+  subroutine col_ef_restart(this, bounds, ncid, flag,is_simple_buildtemp)
     !
     ! !DESCRIPTION:
     ! Read/Write column energy state information to/from restart file.
@@ -5741,18 +5748,20 @@ contains
     type(bounds_type), intent(in)    :: bounds
     type(file_desc_t), intent(inout) :: ncid
     character(len=*) , intent(in)    :: flag
+    logical, intent(in) :: is_simple_buildtemp  ! Simple building temp is being used
     !
     ! !LOCAL VARIABLES:
     logical :: readvar   ! determine if variable is on initial file
     !-----------------------------------------------------------------------
+    if (is_simple_buildtemp) then
+      call restartvar(ncid=ncid, flag=flag, varname='URBAN_AC', xtype=ncd_double,  dim1name='column', &
+            long_name='urban air conditioning flux', units='watt/m^2', &
+            interpinic_flag='interp', readvar=readvar, data=this%eflx_urban_ac)
 
-    call restartvar(ncid=ncid, flag=flag, varname='URBAN_AC', xtype=ncd_double,  dim1name='column', &
-         long_name='urban air conditioning flux', units='watt/m^2', &
-         interpinic_flag='interp', readvar=readvar, data=this%eflx_urban_ac)
-
-    call restartvar(ncid=ncid, flag=flag, varname='URBAN_HEAT', xtype=ncd_double, dim1name='column', &
-         long_name='urban heating flux', units='watt/m^2', &
-         interpinic_flag='interp', readvar=readvar, data=this%eflx_urban_heat)
+      call restartvar(ncid=ncid, flag=flag, varname='URBAN_HEAT', xtype=ncd_double, dim1name='column', &
+            long_name='urban heating flux', units='watt/m^2', &
+            interpinic_flag='interp', readvar=readvar, data=this%eflx_urban_heat)
+    end if
 
   end subroutine col_ef_restart
 
@@ -5768,11 +5777,12 @@ contains
   !------------------------------------------------------------------------
   ! Subroutines to initialize and clean column water flux data structure
   !------------------------------------------------------------------------
-  subroutine col_wf_init(this, begc, endc)
+  subroutine col_wf_init(this, begc, endc, is_prog_buildtemp)
     !
     ! !ARGUMENTS:
     class(column_water_flux) :: this
     integer, intent(in) :: begc,endc
+    logical, intent(in) :: is_prog_buildtemp    ! Prognostic building temp is being used
     ! !LOCAL VARIABLES:
     integer  :: l,c
     integer  :: ncells
@@ -5791,6 +5801,7 @@ contains
     allocate(this%qflx_evap_can          (begc:endc))             ; this%qflx_evap_can        (:)   = spval
     allocate(this%qflx_evap_tot          (begc:endc))             ; this%qflx_evap_tot        (:)   = spval
     allocate(this%qflx_evap_grnd         (begc:endc))             ; this%qflx_evap_grnd       (:)   = spval
+    allocate(this%qflx_condensate_from_ac(begc:endc))             ; this%qflx_condensate_from_ac(:) = 0._r8    ! REMOVE COMMENT: 0 or spval
     allocate(this%qflx_snwcp_liq         (begc:endc))             ; this%qflx_snwcp_liq       (:)   = spval
     allocate(this%qflx_snwcp_ice         (begc:endc))             ; this%qflx_snwcp_ice       (:)   = spval
     allocate(this%qflx_ice_runoff_xs     (begc:endc))             ; this%qflx_ice_runoff_xs   (:)   = 0._r8
@@ -5960,6 +5971,16 @@ contains
      call hist_addfld1d (fname='QDRAI_XS',  units='mm/s',  &
           avgflag='A', long_name='saturation excess drainage', &
            ptr_col=this%qflx_rsub_sat, c2l_scale_type='urbanf')
+
+    if (is_prog_buildtemp) then
+      this%qflx_condensate_from_ac(begc:endc) = 0.0_r8
+      call hist_addfld1d ( &
+         fname='QCOND_FROM_AC', &
+         units='mm/s',  &
+         avgflag='A', &
+         long_name='Condensed water flux from AC dehumidification', &
+         ptr_col=this%qflx_condensate_from_ac, set_nourb=0.0_r8, c2l_scale_type='urbanf', default='inactive')
+    end if
 
     this%qflx_snofrz(begc:endc) = spval
      call hist_addfld1d (fname='QSNOFRZ', units='kg/m2/s', &

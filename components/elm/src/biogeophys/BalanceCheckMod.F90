@@ -192,6 +192,7 @@ contains
      real(r8) :: forc_rain_col(bounds%begc:bounds%endc) ! column level rain rate [mm/s]
      real(r8) :: forc_snow_col(bounds%begc:bounds%endc) ! column level snow rate [mm/s]
      real(r8) :: sol_err_th                             ! solar radiation imbalance threshold
+     
      !-----------------------------------------------------------------------
 
      associate(                                                                         &
@@ -252,6 +253,7 @@ contains
           snow_sinks                 =>    col_wf%snow_sinks              , & ! Output: [real(r8) (:)   ]  snow sinks (mm H2O /s)
           qflx_lateral               =>    col_wf%qflx_lateral            , & ! Input:  [real(r8) (:)   ]  lateral flux of water to neighboring column (mm H2O /s)
           qflx_h2orof_drain          =>    col_wf%qflx_h2orof_drain       , & ! Input:  [real(r8) (:)   ] drainange from floodplain inundation volume (mm H2O/s) 
+          qflx_condensate_from_ac_col=>    col_wf%qflx_condensate_from_ac , & ! Input: [real(r8) (:)]  column level condensate water 
 
           eflx_lwrad_out             =>    veg_ef%eflx_lwrad_out       , & ! Input:  [real(r8) (:)   ]  emitted infrared (longwave) radiation (W/m**2)
           eflx_lwrad_net             =>    veg_ef%eflx_lwrad_net       , & ! Input:  [real(r8) (:)   ]  net infrared (longwave) rad (W/m**2) [+ = to atm]
@@ -259,6 +261,7 @@ contains
           eflx_lh_tot                =>    veg_ef%eflx_lh_tot          , & ! Input:  [real(r8) (:)   ]  total latent heat flux (W/m8*2)  [+ to atm]
           eflx_soil_grnd             =>    veg_ef%eflx_soil_grnd       , & ! Input:  [real(r8) (:)   ]  soil heat flux (W/m**2) [+ = into soil]
           eflx_wasteheat_patch       =>    veg_ef%eflx_wasteheat       , & ! Input:  [real(r8) (:)   ]  sensible heat flux from urban heating/cooling sources of waste heat (W/m**2)
+          eflx_ventilation_patch     =>    veg_ef%eflx_ventilation      ,& ! Input:  [real(r8) (:)   ]  sensible heat flux from building ventilation (W/m**2)
           eflx_heat_from_ac_patch    =>    veg_ef%eflx_heat_from_ac    , & ! Input:  [real(r8) (:)   ]  sensible heat flux put back into canyon due to removal by AC (W/m**2)
           eflx_traffic_patch         =>    veg_ef%eflx_traffic         , & ! Input:  [real(r8) (:)   ]  traffic sensible heat flux (W/m**2)
           eflx_dynbal                =>    grc_ef%eflx_dynbal          , & ! Input:  [real(r8) (:)   ]  energy conversion flux due to dynamic land cover change(W/m**2) [+ to atm]
@@ -333,7 +336,7 @@ contains
           if (col_pp%active(c)) then
              errh2o(c) = endwb(c) - begwb(c) &
                   - (forc_rain_col(c) + forc_snow_col(c)  + qflx_floodc(c) + qflx_from_uphill(c) &
-                  + qflx_surf_irrig_col(c) + qflx_over_supply_col(c) &
+                  + qflx_surf_irrig_col(c) + qflx_over_supply_col(c) + qflx_condensate_from_ac_col(c) &
                   - qflx_evap_tot(c) - qflx_surf(c)  - qflx_h2osfc_surf(c) - qflx_to_downhill(c) &
                   - qflx_qrgwl(c) - qflx_drain(c) - qflx_drain_perched(c) - qflx_snwcp_ice(c) - qflx_ice_runoff_xs(c) &
                   - qflx_lateral(c) + qflx_h2orof_drain(c)) * dtime
@@ -403,6 +406,7 @@ contains
              write(iulog,*)'qflx_surf                  = ',qflx_surf(indexc)
              write(iulog,*)'qflx_qrgwl                 = ',qflx_qrgwl(indexc)
              write(iulog,*)'qflx_drain                 = ',qflx_drain(indexc)
+             write(iulog,*)'qflx_drain                 = ',qflx_condensate_from_ac_col(c)
              write(iulog,*)'qflx_snwcp_ice             = ',qflx_snwcp_ice(indexc)
              write(iulog,*)'qflx_lateral               = ',qflx_lateral(indexc)
              write(iulog,*)'total_plant_stored_h2o_col = ',total_plant_stored_h2o_col(indexc)
@@ -631,7 +635,8 @@ contains
                 errseb(p) = sabv(p) + sabg(p) &
                      - eflx_lwrad_net(p) &
                      - eflx_sh_tot(p) - eflx_lh_tot(p) - eflx_soil_grnd(p) &
-                     + eflx_wasteheat_patch(p) + eflx_heat_from_ac_patch(p) + eflx_traffic_patch(p)
+                     + eflx_wasteheat_patch(p) + eflx_heat_from_ac_patch(p) + eflx_traffic_patch(p) &
+                     + eflx_ventilation_patch(p)
              end if
              !TODO MV - move this calculation to a better place - does not belong in BalanceCheck
              netrad(p) = fsa(p) - eflx_lwrad_net(p)
@@ -946,6 +951,7 @@ contains
      real(r8) :: forc_rain_col(bounds%begc:bounds%endc) ! column level rain rate [mm/s]
      real(r8) :: forc_snow_col(bounds%begc:bounds%endc) ! column level snow rate [mm/s]
      real(r8) :: wa_local_col(bounds%begc:bounds%endc)
+     real(r8) :: qflx_condensate_from_ac_grc(bounds%begg:bounds%endg)  ! grid cell-level condensate from air-conditioning [mm H2O /s]
 
      associate(                                                                         &
           volr                       =>    atm2lnd_vars%volr_grc                      , & ! Input:  [real(r8) (:)   ]  river water storage (m3)
@@ -1004,6 +1010,7 @@ contains
           snow_sources               =>    col_wf%snow_sources            , & ! Output: [real(r8) (:)   ]  snow sources (mm H2O /s)
           snow_sinks                 =>    col_wf%snow_sinks              , & ! Output: [real(r8) (:)   ]  snow sinks (mm H2O /s)
           qflx_lateral               =>    col_wf%qflx_lateral            , & ! Input:  [real(r8) (:)   ]  lateral flux of water to neighboring column (mm H2O /s)
+          qflx_condensate_from_ac_col=>    col_wf%qflx_condensate_from_ac , & ! Input: [real(r8) (:)]  column level condensate water 
 
           eflx_lwrad_out             =>    veg_ef%eflx_lwrad_out       , & ! Input:  [real(r8) (:)   ]  emitted infrared (longwave) radiation (W/m**2)
           eflx_lwrad_net             =>    veg_ef%eflx_lwrad_net       , & ! Input:  [real(r8) (:)   ]  net infrared (longwave) rad (W/m**2) [+ = to atm]
@@ -1125,6 +1132,13 @@ contains
       call c2g(bounds, errh2o(bounds%begc:bounds%endc)                , &
            errh2o_grc(bounds%begg:bounds%endg)                        , &
            c2l_scale_type= urbanf, l2g_scale_type=unity )
+
+
+      ! Water balance check at grid cell
+      call c2g( bounds,  &
+            qflx_condensate_from_ac_col(bounds%begc:bounds%endc),  &
+            qflx_condensate_from_ac_grc(bounds%begg:bounds%endg),  &
+            c2l_scale_type= urbanf, l2g_scale_type=unity )
 
     end associate
 

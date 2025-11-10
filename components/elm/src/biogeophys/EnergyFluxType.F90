@@ -140,13 +140,19 @@ module EnergyFluxType
 contains
 
   !------------------------------------------------------------------------
-  subroutine Init(this, bounds, t_grnd_col)
+  subroutine Init(this, bounds, t_grnd_col, is_simple_buildtemp, is_prog_buildtemp)
 
     class(energyflux_type)         :: this
     type(bounds_type) , intent(in) :: bounds  
     real(r8)          , intent(in) :: t_grnd_col( bounds%begc: )
+    logical           , intent(in) :: is_simple_buildtemp        ! If using simple building temp method
+    logical           , intent(in) :: is_prog_buildtemp          ! If using prognostic building temp method
 
     SHR_ASSERT_ALL((ubound(t_grnd_col) == (/bounds%endc/)), errMsg(__FILE__, __LINE__))
+
+    ! REMOVE
+    
+    ! END REMOVE
 
     call this%InitAllocate ( bounds )
     call this%InitHistory ( bounds )

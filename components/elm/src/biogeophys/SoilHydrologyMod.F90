@@ -106,6 +106,7 @@ contains
          qflx_from_uphill =>    col_wf%qflx_from_uphill , & ! Output: [real(r8) (:)   ]  water received from uphill topounit (mm/s)
          qflx_surf        =>    col_wf%qflx_surf        , & ! Output: [real(r8) (:)   ]  surface runoff (mm H2O /s)
          qflx_irrig       =>    col_wf%qflx_irrig       , & ! Input:  [real(r8) (:)   ]  irrigation flux (mm H2O /s)
+         qflx_condensate_from_ac => col_wf%qflx_condensate_from_ac, & ! Input: [real(r8) (:)   ] condensate from air-conditioning (mm H2O /s)
          irrig_rate       =>    veg_wf%irrig_rate       , & ! Input:  [real(r8) (:)   ]  current irrigation rate (applied if !n_irrig_steps_left > 0) [mm/s]
 
          zwt              =>    soilhydrology_vars%zwt_col          , & ! Input:  [real(r8) (:)   ]  water table depth (m)
@@ -245,7 +246,7 @@ contains
             qflx_surf(c) = 0._r8
          end if
          ! send flood water flux to runoff for all urban columns
-         qflx_surf(c) = qflx_surf(c)  + qflx_floodc(c)
+         qflx_surf(c) = qflx_surf(c)  + qflx_floodc(c) + qflx_condensate_from_ac(c)
 
       end do
 

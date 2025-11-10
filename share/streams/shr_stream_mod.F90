@@ -1924,7 +1924,7 @@ contains
 
     use netcdf
 
-    ! !INPUT/OUTPUT PARAMETERS:
+    ! !INPUT/OUTPUT PARAMETERS: 
 
     type(shr_stream_streamType),intent(in)  :: strm     ! data stream
     integer(SHR_KIND_IN)       ,intent(in)  :: k        ! file to query

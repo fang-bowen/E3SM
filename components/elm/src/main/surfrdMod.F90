@@ -36,6 +36,8 @@ module surfrdMod
   public :: surfrd_get_grid_conn ! Reads grid connectivity information from domain file
   public :: surfrd_topounit_data ! Read topounit physical properties
   public :: surfrd_get_topo_for_solar_rad    ! Read topography dataset for TOP solar radiation parameterization
+  public :: surfrd_get_nlevurb      ! Read surface dataset to determine nlevurb
+
   !
   ! !PRIVATE MEMBER FUNCTIONS:
   private :: surfrd_special             ! Read the special landunits
@@ -1785,4 +1787,48 @@ contains
     
   end subroutine surfrd_fates_nocropmod
   
+
+!-----------------------------------------------------------------------
+  subroutine surfrd_get_nlevurb (lfsurdat, actual_nlevurb)
+    !
+    ! !DESCRIPTION:
+    ! Read nlevurb from the surface dataset
+    !
+    ! !USES:
+    use fileutils   , only : getfil
+    !
+    ! !ARGUMENTS:
+    character(len=*), intent(in) :: lfsurdat  ! surface dataset filename
+    integer, intent(out) :: actual_nlevurb    ! nlevurb from surface dataset
+    !
+    ! !LOCAL VARIABLES:
+    character(len=256):: locfn                ! local file name
+    type(file_desc_t) :: ncid                 ! netcdf file id
+    integer :: dimid                          ! netCDF dimension id
+    character(len=32) :: subname = 'surfrd_get_nlevurb'  ! subroutine name
+    !-----------------------------------------------------------------------
+
+    if (masterproc) then
+       write(iulog,*) 'Attempting to read nlevurb from the surface data .....'
+       if (lfsurdat == ' ') then
+          write(iulog,*)'lfsurdat must be specified'
+          call endrun(msg=errMsg(__FILE__, __LINE__))
+       endif
+    endif
+
+    ! Open surface dataset
+    call getfil( lfsurdat, locfn, 0 )
+    
+    call ncd_pio_openfile (ncid, trim(locfn), 0)
+
+    ! Read nlevurb
+    call ncd_inqdlen(ncid, dimid, actual_nlevurb, 'nlevurb')
+
+    if ( masterproc )then
+       write(iulog,*) 'Successfully read nlevurb from the surface data'
+       write(iulog,*)
+    end if
+
+  end subroutine surfrd_get_nlevurb
+
 end module surfrdMod

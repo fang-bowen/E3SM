@@ -712,15 +712,26 @@ If FALSE, don't write any restart files.
 </entry>
 
 <entry id="urban_hac" type="char*16" category="elm_physics"
-       group="elm_inparm" valid_values="OFF,ON,ON_WASTEHEAT" >
+       group="elmu_inparm" valid_values="OFF,ON,ON_WASTEHEAT" >
 Turn urban air conditioning/heating ON or OFF and add wasteheat:
     OFF          = Air conditioning/heating is OFF in buildings, internal temperature allowed to float freely
     ON           = Air conditioning/heating is ON in buildings, internal temperature constrained
     ON_WASTEHEAT = Air conditioning/heating is ON and waste-heat sent to urban canyon
 </entry>
 
+<entry id="building_temp_method" type="integer" category="elm_physics"
+       group="elmu_inparm" valid_values="0,1" >
+       0 = simpler method (clm4_5)
+       1 = prognostic calculation of interior building temp (clm5_0)
+</entry>
+
+<entry id="urban_explicit_ac" type="logical" category="elm_physics"
+       group="elmu_inparm" valid_values="" >
+If TRUE, use explicit, time-varying AC adoption rate for air-conditioning flux and interior building temperature calculations.
+</entry>
+
 <entry id="urban_traffic" type="logical" category="elm_physics"
-       group="elm_inparm" valid_values="" >
+       group="elmu_inparm" valid_values="" >
 If TRUE, urban traffic flux will be activated (Currently NOT implemented).
 </entry>
 
@@ -1487,6 +1498,50 @@ Mapping method from human population density input file to the model resolution
     spval    = set to special value
     copy     = copy using the same indices
 </entry>
+
+
+<!-- ========================================================================================  -->
+<!-- urbantv_streams Namelist                                                                  -->
+<!-- ========================================================================================  -->
+
+<!-- urban time varying -->
+
+<entry id="stream_year_first_urbantv" type="integer" category="datasets"
+       group="urbantv_streams" valid_values="" >
+First year to loop over for urban time varying data
+</entry>
+
+<entry id="stream_year_last_urbantv" type="integer" category="datasets"
+       group="urbantv_streams" valid_values="" >
+Last year to loop over for urban time varying data
+</entry>
+
+<entry id="model_year_align_urbantv" type="integer" category="datasets"
+       group="urbantv_streams" valid_values="" >
+Simulation year that aligns with stream_year_first_urbantv value
+</entry>
+
+<entry id="stream_fldfilename_urbantv" type="char*256" category="datasets"
+       input_pathname="abs" group="urbantv_streams" valid_values="" >
+Filename of input stream data for urban time varying
+</entry>
+
+<entry id="urbantv_tintalgo" type="char*80" category="datasets"
+       group="urbantv_streams" valid_values="linear,nearest,lower,upper" >
+Time interpolation method to use with urban time varying streams
+</entry>
+
+<entry id="urbantvmapalgo" type="char*256" category="datasets"
+       group="urbantv_streams" valid_values="bilinear,nn,nnoni,nnonj,spval,copy" >
+Mapping method from urban time varying input file to the model resolution
+    bilinear = bilinear interpolation
+    nn       = nearest neighbor
+    nnoni    = nearest neighbor on the "i" (longitude) axis
+    nnonj    = nearest neighbor on the "j" (latitude) axis
+    spval    = set to special value
+    copy     = copy using the same indices
+</entry>
+
 
 <entry id="diri" type="char*256" category="datm"
        group="modelio" valid_values="">

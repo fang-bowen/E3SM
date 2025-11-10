@@ -77,6 +77,12 @@ attributes from the config_cache.xml file (with keys converted to upper-case).
 <!-- Default urban air conditioning/heating and wasteheat -->
 <urban_hac phys="elm" >ON</urban_hac>
 
+<!-- Default building temperature method -->
+<building_temp_method>1</building_temp_method>
+
+<!-- Explicit, time-varying urban air conditioning adoption rate scheme -->
+<urban_explicit_ac>.false.</urban_explicit_ac>
+
 <!-- Default urban traffic flux -->
 <urban_traffic>.false.</urban_traffic>
 
@@ -952,6 +958,45 @@ this mask will have smb calculated over the entire global land surface
 <popdensmapalgo use_fates=".true."   hgrid="1x1_asphaltjungleNJ" >nn</popdensmapalgo>
 <popdensmapalgo use_fates=".true."   hgrid="1x1_tropicAtl"       >nn</popdensmapalgo>
 <popdensmapalgo use_fates=".true."   hgrid="5x5_amazon"          >nn</popdensmapalgo>
+
+<!-- Urban time varying streams namelist defaults -->
+<stream_year_first_urbantv sim_year_range="1850-2100" >2015</stream_year_first_urbantv>
+<stream_year_last_urbantv  sim_year_range="1850-2100" >2106</stream_year_last_urbantv>
+<model_year_align_urbantv  sim_year_range="1850-2100" >2015</model_year_align_urbantv>
+
+<stream_year_first_urbantv sim_year="2000" >2000</stream_year_first_urbantv>
+<stream_year_last_urbantv  sim_year="2000" >2000</stream_year_last_urbantv>
+
+<stream_year_first_urbantv sim_year="1850" >1850</stream_year_first_urbantv>
+<stream_year_last_urbantv  sim_year="1850" >1850</stream_year_last_urbantv>
+
+<stream_year_first_urbantv sim_year="1000" >2000</stream_year_first_urbantv>
+<stream_year_last_urbantv  sim_year="1000" >2000</stream_year_last_urbantv>
+
+<stream_year_first_urbantv sim_year="constant" sim_year_range="1000-1002" >2000</stream_year_first_urbantv>
+<stream_year_last_urbantv  sim_year="constant" sim_year_range="1000-1002" >2000</stream_year_last_urbantv>
+
+<stream_year_first_urbantv sim_year="constant" sim_year_range="1000-1004" >2000</stream_year_first_urbantv>
+<stream_year_last_urbantv  sim_year="constant" sim_year_range="1000-1004" >2000</stream_year_last_urbantv>
+
+<stream_year_first_urbantv sim_year="constant" sim_year_range="1850-2000" >1850</stream_year_first_urbantv>
+<stream_year_last_urbantv  sim_year="constant" sim_year_range="1850-2000" >2106</stream_year_last_urbantv>
+
+<stream_fldfilename_urbantv hgrid="0.9x1.25" urban_explicit_ac=".false."
+>/global/homes/e/erick/m5086/datasets/timevarying_data/varying_tmax_oleson/CLM50_tbuildmax_Oleson_2016_0.9x1.25_simyr1849-2106_c160923.nc</stream_fldfilename_urbantv>
+<stream_fldfilename_urbantv hgrid="0.9x1.25" urban_explicit_ac=".true."
+>/global/homes/e/erick/m5086/datasets/timevarying_data/with_adoption_rate/CTSM52_urbantv_Li_2024_0.9x1.25_simyr1849-2106_c20230621.nc</stream_fldfilename_urbantv>
+
+
+<urbantvmapalgo >nn</urbantvmapalgo>
+
+<urbantvmapalgo hgrid="1x1_brazil"          >nn</urbantvmapalgo>
+<urbantvmapalgo hgrid="1x1_mexicocityMEX"   >nn</urbantvmapalgo>
+<urbantvmapalgo hgrid="1x1_vancouverCAN"    >nn</urbantvmapalgo>
+<urbantvmapalgo hgrid="1x1_urbanc_alpha"    >nn</urbantvmapalgo>
+<urbantvmapalgo hgrid="1x1_camdenNJ"        >nn</urbantvmapalgo>
+<urbantvmapalgo hgrid="1x1_asphaltjungleNJ" >nn</urbantvmapalgo>
+<urbantvmapalgo hgrid="5x5_amazon"          >nn</urbantvmapalgo>
 
 <!-- Create crop on a separate land-unit -->
 <create_crop_landunit use_crop=".true."                  >.true.</create_crop_landunit>

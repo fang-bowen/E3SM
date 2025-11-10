@@ -37,7 +37,7 @@ module controlMod
   use CanopyStateType       , only: perchroot, perchroot_alt
   use CanopyHydrologyMod      , only: CanopyHydrology_readnl
   use SurfaceAlbedoType        , only: albice, lake_melt_icealb
-  use UrbanParamsType         , only: urban_hac, urban_traffic
+  use UrbanParamsType         , only: UrbanReadNML
   use FrictionVelocityMod     , only: implicit_stress, atm_gustiness, force_land_gustiness
   use elm_varcon              , only: h2osno_max
   use elm_varctl              , only: use_dynroot, use_fan, fan_mode, fan_to_bgc_veg
@@ -233,10 +233,6 @@ contains
          create_crop_landunit, nsegspc, co2_ppmv, override_nsrest, &
          albice, more_vertlayers, subgridflag, irrigate, tw_irr, extra_gw_irr, firrig_data, all_active, &
          mpi_sync_nstep_freq
-    ! Urban options
-
-    namelist /elm_inparm/  &
-         urban_hac, urban_traffic
 
     ! Stress options
     namelist /elm_inparm/ &
@@ -398,7 +394,8 @@ contains
        if (ierr == 0) then
           read(unitn, elm_inparm, iostat=ierr)
           if (ierr /= 0) then
-             call endrun(msg='ERROR reading elm_inparm namelist'//errMsg(__FILE__, __LINE__))
+            !  call endrun(msg='ERROR reading elm_inparm namelist'//errMsg(__FILE__, __LINE__))
+            call endrun(msg='ERROR reading elm_inparm namelist '//trim(NLFilename)//errMsg(__FILE__, __LINE__))   ! REMOVE
           end if
        end if
 
@@ -423,11 +420,6 @@ contains
        ! ----------------------------------------------------------------------
 
        call set_timemgr_init( dtime_in=dtime )
-
-       if (urban_traffic) then
-          write(iulog,*)'Urban traffic fluxes are not implemented currently'
-          call endrun(msg=errMsg(__FILE__, __LINE__))
-       end if
 
        ! History and restart files
 
@@ -597,7 +589,7 @@ contains
     call init_hydrology( NLFilename )
 
     call CanopyHydrology_readnl( NLFilename )
-
+    call UrbanReadNML           ( NLFilename )
     ! ----------------------------------------------------------------------
     ! Broadcast all control information if appropriate
     ! ----------------------------------------------------------------------
@@ -909,8 +901,6 @@ contains
     call mpi_bcast (lake_melt_icealb, numrad, MPI_REAL8, 0, mpicom, ier)
 
     ! physics variables
-    call mpi_bcast (urban_hac, len(urban_hac), MPI_CHARACTER, 0, mpicom, ier)
-    call mpi_bcast (urban_traffic , 1, MPI_LOGICAL, 0, mpicom, ier)
     call mpi_bcast (implicit_stress, 1, MPI_LOGICAL, 0, mpicom, ier)
     call mpi_bcast (atm_gustiness, 1, MPI_LOGICAL, 0, mpicom, ier)
     call mpi_bcast (force_land_gustiness, 1, MPI_LOGICAL, 0, mpicom, ier)
@@ -1234,8 +1224,6 @@ contains
     write(iulog,*) '   constant historical climate during transient simulation = ', const_climate_hist
 
     write(iulog,*) '   land-ice albedos      (unitless 0-1)   = ', albice
-    write(iulog,*) '   urban air conditioning/heating and wasteheat   = ', urban_hac
-    write(iulog,*) '   urban traffic flux   = ', urban_traffic
     write(iulog,*) '   implicit_stress   = ', implicit_stress
     write(iulog,*) '   atm_gustiness   = ', atm_gustiness
     write(iulog,*) '   force_land_gustiness   = ', force_land_gustiness
