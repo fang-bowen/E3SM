@@ -13,6 +13,7 @@ module dynSubgridDriverMod
   use dynSubgridControlMod, only : get_flanduse_timeseries
   use dynSubgridControlMod, only : get_do_transient_pfts, get_do_transient_crops
   use dynSubgridControlMod, only : get_do_transient_urban
+  use dynSubgridControlMod, only : get_do_transient_urban_properties, get_furban_timeseries
   use dynSubgridControlMod, only : get_do_harvest
   use dynPriorWeightsMod  , only : prior_weights_type
   use dynPatchStateUpdaterMod      , only : patch_state_updater_type
@@ -31,6 +32,7 @@ module dynSubgridDriverMod
   use CropType            , only : crop_type
   use dyncropFileMod      , only : dyncrop_init, dyncrop_interp
   use dynurbanFileMod     , only : dynurban_init, dynurban_interp
+  use dynurbanparamsFileMod, only : dynurbanparams_init, dynurbanparams_interp
   use filterMod           , only : filter, filter_inactive_and_active
 
   use GridcellDataType    , only : gridcell_carbon_state, gridcell_carbon_flux
@@ -133,6 +135,11 @@ contains
        call dynurban_init(bounds, dynurban_filename=get_flanduse_timeseries())
     end if
 
+    ! Initialize stuff for prescribed transient urban properties
+    if (get_do_transient_urban_properties()) then
+       call dynurbanparams_init(bounds, dynurbanparams_filename=get_furban_timeseries())
+    end if
+
     ! Initialize for iac instead of files
     if (iac_present) then
        call dyn_iac_init(bounds)
@@ -153,6 +160,10 @@ contains
 
     if (get_do_transient_urban()) then
        call dynurban_interp(bounds)
+    end if
+
+    if (get_do_transient_urban_properties()) then
+       call dynurbanparams_interp(bounds)
     end if
 
     !$OMP PARALLEL DO PRIVATE (nc, bounds_clump)
@@ -282,6 +293,14 @@ contains
 
     if (get_do_transient_urban()) then
        call dynurban_interp(bounds_proc)
+    end if
+
+    ! Urban properties are updated here, between dyn_hwcontent_init and
+    ! dyn_hwcontent_final, so that the change in urban column heat content from
+    ! changed heat capacities (CV_ROOF, CV_WALL, CV_IMPROAD) is booked by the dynbal
+    ! heat flux.
+    if (get_do_transient_urban_properties()) then
+       call dynurbanparams_interp(bounds_proc)
     end if
 
     if (get_do_harvest() .or. fates_harvest_mode == fates_harvest_hlmlanduse) then

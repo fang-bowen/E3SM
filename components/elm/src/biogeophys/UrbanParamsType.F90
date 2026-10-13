@@ -98,6 +98,7 @@ module UrbanParamsType
    contains
 
      procedure, public :: Init
+     procedure, public :: SetLunitParams  ! set urban parameters for one landunit from urbinp
 
   end type urbanparams_type
   !
@@ -139,11 +140,8 @@ module UrbanParamsType
   !  use shr_infnan_mod  , only : nan => shr_infnan_nan, assignment(=)
     use elm_varpar      , only : nlevcan, nlevcan, numrad, nlevgrnd, nlevurb
     use elm_varpar      , only : nlevsoi, nlevgrnd
-    use elm_varctl      , only : use_vancouver, use_mexicocity
-    use elm_varcon      , only : vkc
     use column_varcon   , only : icol_roof, icol_sunwall, icol_shadewall
     use column_varcon   , only : icol_road_perv, icol_road_imperv, icol_road_perv
-    use landunit_varcon , only : isturb_MIN
     !
     ! !ARGUMENTS:
     class(urbanparams_type) :: this
@@ -152,15 +150,7 @@ module UrbanParamsType
     ! !LOCAL VARIABLES:
     integer             :: j,l,c,p,t,ti,topi,g       ! indices
     integer             :: nc,fl,ib        ! indices 
-    integer             :: dindx           ! urban density type index
     integer             :: ier             ! error status
-    real(r8)            :: sumvf           ! sum of view factors for wall or road
-    real(r8), parameter :: alpha = 4.43_r8 ! coefficient used to calculate z_d_town
-    real(r8), parameter :: beta = 1.0_r8   ! coefficient used to calculate z_d_town
-    real(r8), parameter :: C_d = 1.2_r8    ! drag coefficient as used in Grimmond and Oke (1999)
-    real(r8)            :: plan_ai         ! plan area index - ratio building area to plan area (-)
-    real(r8)            :: frontal_ai      ! frontal area index of buildings (-)
-    real(r8)            :: build_lw_ratio  ! building short/long side ratio (-)
     integer		:: begl, endl
     integer		:: begt, endt
     integer		:: begc, endc
@@ -222,164 +212,15 @@ module UrbanParamsType
             default='inactive')
 
     ! Initialize time constant urban variables
+    ! (The per-landunit settings are in SetLunitParams so that they can also be
+    ! called during the run for dynamic urban properties.)
 
     do l = bounds%begl,bounds%endl
 
        ! "0" refers to urban wall/roof surface and "nlevsoi" refers to urban wall/roof bottom
        if (lun_pp%urbpoi(l)) then
 
-          g = lun_pp%gridcell(l)
-          ti = lun_pp%topounit(l) ! for the topounit
-          topi = grc_pp%topi(g)
-          t = ti - topi + 1
-          dindx = lun_pp%itype(l) - isturb_MIN + 1		  
-
-          this%wind_hgt_canyon(l) = urbinp%wind_hgt_canyon(g,t,dindx)
-          do ib = 1,numrad
-             this%alb_roof_dir   (l,ib) = urbinp%alb_roof_dir   (g,t,dindx,ib)
-             this%alb_roof_dif   (l,ib) = urbinp%alb_roof_dif   (g,t,dindx,ib)
-             this%alb_improad_dir(l,ib) = urbinp%alb_improad_dir(g,t,dindx,ib)
-             this%alb_perroad_dir(l,ib) = urbinp%alb_perroad_dir(g,t,dindx,ib)
-             this%alb_improad_dif(l,ib) = urbinp%alb_improad_dif(g,t,dindx,ib)
-             this%alb_perroad_dif(l,ib) = urbinp%alb_perroad_dif(g,t,dindx,ib)
-             this%alb_wall_dir   (l,ib) = urbinp%alb_wall_dir   (g,t,dindx,ib)
-             this%alb_wall_dif   (l,ib) = urbinp%alb_wall_dif   (g,t,dindx,ib)
-          end do
-          this%em_roof   (l) = urbinp%em_roof   (g,t,dindx)
-          this%em_improad(l) = urbinp%em_improad(g,t,dindx)
-          this%em_perroad(l) = urbinp%em_perroad(g,t,dindx)
-          this%em_wall   (l) = urbinp%em_wall   (g,t,dindx)
-
-          ! Landunit level initialization for urban wall and roof layers and interfaces
-
-          lun_pp%canyon_hwr(l)   = urbinp%canyon_hwr(g,t,dindx)
-          lun_pp%wtroad_perv(l)  = urbinp%wtroad_perv(g,t,dindx)
-          lun_pp%ht_roof(l)      = urbinp%ht_roof(g,t,dindx)
-          lun_pp%wtlunit_roof(l) = urbinp%wtlunit_roof(g,t,dindx)
-
-          this%tk_wall(l,:)      = urbinp%tk_wall(g,t,dindx,:)
-          this%tk_roof(l,:)      = urbinp%tk_roof(g,t,dindx,:)
-          this%tk_improad(l,:)   = urbinp%tk_improad(g,t,dindx,:)
-          this%cv_wall(l,:)      = urbinp%cv_wall(g,t,dindx,:)
-          this%cv_roof(l,:)      = urbinp%cv_roof(g,t,dindx,:)
-          this%cv_improad(l,:)   = urbinp%cv_improad(g,t,dindx,:)
-          this%thick_wall(l)     = urbinp%thick_wall(g,t,dindx)
-          this%thick_roof(l)     = urbinp%thick_roof(g,t,dindx)
-          this%nlev_improad(l)   = urbinp%nlev_improad(g,t,dindx)
-          this%t_building_min(l) = urbinp%t_building_min(g,t,dindx)
-          this%t_building_max(l) = urbinp%t_building_max(g,t,dindx)
-
-          ! Inferred from Sailor and Lu 2004
-          if (urban_traffic) then
-             this%eflx_traffic_factor(l) = 3.6_r8 * (lun_pp%canyon_hwr(l)-0.5_r8) + 1.0_r8
-          else
-             this%eflx_traffic_factor(l) = 0.0_r8
-          end if
-
-          if (use_vancouver .or. use_mexicocity) then
-             ! Freely evolving
-             this%t_building_max(l) = 380.00_r8
-             this%t_building_min(l) = 200.00_r8
-          else
-             if (trim(urban_hac) == urban_hac_off) then
-                ! Overwrite values read in from urbinp by freely evolving values
-                this%t_building_max(l) = 380.00_r8
-                this%t_building_min(l) = 200.00_r8
-             end if
-          end if
-
-          !----------------------------------------------------------------------------------
-          ! View factors for road and one wall in urban canyon (depends only on canyon_hwr)
-          ! ---------------------------------------------------------------------------------------
-          !                                                        WALL    |
-          !                  ROAD                                          |
-          !                                                         wall   |
-          !          -----\          /-----   -             -  |\----------/
-          !              | \  vsr   / |       |         r   |  | \  vww   /   s
-          !              |  \      /  |       h         o   w  |  \      /    k
-          !        wall  |   \    /   | wall  |         a   |  |   \    /     y
-          !              |vwr \  / vwr|       |         d   |  |vrw \  / vsw
-          !              ------\/------       -             -  |-----\/-----
-          !                   road                                  wall   |
-          !              <----- w ---->                                    |
-          !                                                    <---- h --->|
-          !
-          !    vsr = view factor of sky for road          vrw = view factor of road for wall
-          !    vwr = view factor of one wall for road     vww = view factor of opposing wall for wall
-          !                                               vsw = view factor of sky for wall
-          !    vsr + vwr + vwr = 1                        vrw + vww + vsw = 1
-          !
-          ! Source: Masson, V. (2000) A physically-based scheme for the urban energy budget in
-          ! atmospheric models. Boundary-Layer Meteorology 94:357-397
-          !
-          ! - Calculate urban land unit aerodynamic constants using Macdonald (1998) as used in
-          ! Grimmond and Oke (1999)
-          ! ---------------------------------------------------------------------------------------
-
-          ! road -- sky view factor -> 1 as building height -> 0
-          ! and -> 0 as building height -> infinity
-
-          this%vf_sr(l) = sqrt(lun_pp%canyon_hwr(l)**2 + 1._r8) - lun_pp%canyon_hwr(l)
-          this%vf_wr(l) = 0.5_r8 * (1._r8 - this%vf_sr(l))
-
-          ! one wall -- sky view factor -> 0.5 as building height -> 0
-          ! and -> 0 as building height -> infinity
-
-          this%vf_sw(l) = 0.5_r8 * (lun_pp%canyon_hwr(l) + 1._r8 - sqrt(lun_pp%canyon_hwr(l)**2+1._r8)) / lun_pp%canyon_hwr(l)
-          this%vf_rw(l) = this%vf_sw(l)
-          this%vf_ww(l) = 1._r8 - this%vf_sw(l) - this%vf_rw(l)
-
-          ! error check -- make sure view factor sums to one for road and wall
-          sumvf = this%vf_sr(l) + 2._r8*this%vf_wr(l)
-          if (abs(sumvf-1._r8) > 1.e-06_r8 ) then
-             write (iulog,*) 'urban road view factor error',sumvf
-             write (iulog,*) 'elm model is stopping'
-             call endrun(decomp_index=l, elmlevel=namel, msg=errmsg(__FILE__, __LINE__))
-          endif
-          sumvf = this%vf_sw(l) + this%vf_rw(l) + this%vf_ww(l)
-          if (abs(sumvf-1._r8) > 1.e-06_r8 ) then
-             write (iulog,*) 'urban wall view factor error',sumvf
-             write (iulog,*) 'elm model is stopping'
-             call endrun(decomp_index=l, elmlevel=namel, msg=errmsg(__FILE__, __LINE__))
-          endif
-
-          !----------------------------------------------------------------------------------
-          ! Calculate urban land unit aerodynamic constants using Macdonald (1998) as used in
-          ! Grimmond and Oke (1999)
-          !----------------------------------------------------------------------------------
-
-          ! Calculate plan area index
-          plan_ai = lun_pp%canyon_hwr(l)/(lun_pp%canyon_hwr(l) + 1._r8)
-
-          ! Building shape shortside/longside ratio (e.g. 1 = square )
-          ! This assumes the building occupies the entire canyon length
-          build_lw_ratio = plan_ai
-
-          ! Calculate frontal area index
-          frontal_ai = (1._r8 - plan_ai) * lun_pp%canyon_hwr(l)
-
-          ! Adjust frontal area index for different building configuration
-          frontal_ai = frontal_ai * sqrt(1/build_lw_ratio) * sqrt(plan_ai)
-
-          ! Calculate displacement height
-          if (use_vancouver) then
-             lun_pp%z_d_town(l) = 3.5_r8
-          else if (use_mexicocity) then
-             lun_pp%z_d_town(l) = 10.9_r8
-          else
-             lun_pp%z_d_town(l) = (1._r8 + alpha**(-plan_ai) * (plan_ai - 1._r8)) * lun_pp%ht_roof(l)
-          end if
-
-          ! Calculate the roughness length
-          if (use_vancouver) then
-             lun_pp%z_0_town(l) = 0.35_r8
-          else if (use_mexicocity) then
-             lun_pp%z_0_town(l) = 2.2_r8
-          else
-             lun_pp%z_0_town(l) = lun_pp%ht_roof(l) * (1._r8 - lun_pp%z_d_town(l) / lun_pp%ht_roof(l)) * &
-                  exp(-1.0_r8 * (0.5_r8 * beta * C_d / vkc**2 * &
-                  (1 - lun_pp%z_d_town(l) / lun_pp%ht_roof(l)) * frontal_ai)**(-0.5_r8))
-          end if
+          call this%SetLunitParams(l)
 
        else ! Not urban point
 
@@ -402,6 +243,196 @@ module UrbanParamsType
 
 
   end subroutine Init
+
+  !-----------------------------------------------------------------------
+  subroutine SetLunitParams(this, l)
+    !
+    ! !DESCRIPTION:
+    ! Set urban parameters for urban landunit l from the urbinp data structure, and
+    ! compute the quantities derived from them (view factors, traffic factor,
+    ! displacement height and roughness length).
+    !
+    ! Called at initialization for all urban landunits, and (with dynamic urban
+    ! properties, do_transient_urban_properties) after urbinp is updated from the
+    ! furban_timeseries file.
+    !
+    ! !USES:
+    use elm_varpar      , only : numrad
+    use elm_varctl      , only : use_vancouver, use_mexicocity
+    use elm_varcon      , only : vkc
+    use landunit_varcon , only : isturb_MIN
+    !
+    ! !ARGUMENTS:
+    class(urbanparams_type) :: this
+    integer, intent(in)     :: l   ! urban landunit index
+    !
+    ! !LOCAL VARIABLES:
+    integer             :: t,ti,topi,g     ! indices
+    integer             :: ib              ! band index
+    integer             :: dindx           ! urban density type index
+    real(r8)            :: sumvf           ! sum of view factors for wall or road
+    real(r8), parameter :: alpha = 4.43_r8 ! coefficient used to calculate z_d_town
+    real(r8), parameter :: beta = 1.0_r8   ! coefficient used to calculate z_d_town
+    real(r8), parameter :: C_d = 1.2_r8    ! drag coefficient as used in Grimmond and Oke (1999)
+    real(r8)            :: plan_ai         ! plan area index - ratio building area to plan area (-)
+    real(r8)            :: frontal_ai      ! frontal area index of buildings (-)
+    real(r8)            :: build_lw_ratio  ! building short/long side ratio (-)
+    !-----------------------------------------------------------------------
+
+    g = lun_pp%gridcell(l)
+    ti = lun_pp%topounit(l) ! for the topounit
+    topi = grc_pp%topi(g)
+    t = ti - topi + 1
+    dindx = lun_pp%itype(l) - isturb_MIN + 1		  
+
+    this%wind_hgt_canyon(l) = urbinp%wind_hgt_canyon(g,t,dindx)
+    do ib = 1,numrad
+       this%alb_roof_dir   (l,ib) = urbinp%alb_roof_dir   (g,t,dindx,ib)
+       this%alb_roof_dif   (l,ib) = urbinp%alb_roof_dif   (g,t,dindx,ib)
+       this%alb_improad_dir(l,ib) = urbinp%alb_improad_dir(g,t,dindx,ib)
+       this%alb_perroad_dir(l,ib) = urbinp%alb_perroad_dir(g,t,dindx,ib)
+       this%alb_improad_dif(l,ib) = urbinp%alb_improad_dif(g,t,dindx,ib)
+       this%alb_perroad_dif(l,ib) = urbinp%alb_perroad_dif(g,t,dindx,ib)
+       this%alb_wall_dir   (l,ib) = urbinp%alb_wall_dir   (g,t,dindx,ib)
+       this%alb_wall_dif   (l,ib) = urbinp%alb_wall_dif   (g,t,dindx,ib)
+    end do
+    this%em_roof   (l) = urbinp%em_roof   (g,t,dindx)
+    this%em_improad(l) = urbinp%em_improad(g,t,dindx)
+    this%em_perroad(l) = urbinp%em_perroad(g,t,dindx)
+    this%em_wall   (l) = urbinp%em_wall   (g,t,dindx)
+
+    ! Landunit level initialization for urban wall and roof layers and interfaces
+
+    lun_pp%canyon_hwr(l)   = urbinp%canyon_hwr(g,t,dindx)
+    lun_pp%wtroad_perv(l)  = urbinp%wtroad_perv(g,t,dindx)
+    lun_pp%ht_roof(l)      = urbinp%ht_roof(g,t,dindx)
+    lun_pp%wtlunit_roof(l) = urbinp%wtlunit_roof(g,t,dindx)
+
+    this%tk_wall(l,:)      = urbinp%tk_wall(g,t,dindx,:)
+    this%tk_roof(l,:)      = urbinp%tk_roof(g,t,dindx,:)
+    this%tk_improad(l,:)   = urbinp%tk_improad(g,t,dindx,:)
+    this%cv_wall(l,:)      = urbinp%cv_wall(g,t,dindx,:)
+    this%cv_roof(l,:)      = urbinp%cv_roof(g,t,dindx,:)
+    this%cv_improad(l,:)   = urbinp%cv_improad(g,t,dindx,:)
+    this%thick_wall(l)     = urbinp%thick_wall(g,t,dindx)
+    this%thick_roof(l)     = urbinp%thick_roof(g,t,dindx)
+    this%nlev_improad(l)   = urbinp%nlev_improad(g,t,dindx)
+    this%t_building_min(l) = urbinp%t_building_min(g,t,dindx)
+    this%t_building_max(l) = urbinp%t_building_max(g,t,dindx)
+
+    ! Inferred from Sailor and Lu 2004
+    if (urban_traffic) then
+       this%eflx_traffic_factor(l) = 3.6_r8 * (lun_pp%canyon_hwr(l)-0.5_r8) + 1.0_r8
+    else
+       this%eflx_traffic_factor(l) = 0.0_r8
+    end if
+
+    if (use_vancouver .or. use_mexicocity) then
+       ! Freely evolving
+       this%t_building_max(l) = 380.00_r8
+       this%t_building_min(l) = 200.00_r8
+    else
+       if (trim(urban_hac) == urban_hac_off) then
+          ! Overwrite values read in from urbinp by freely evolving values
+          this%t_building_max(l) = 380.00_r8
+          this%t_building_min(l) = 200.00_r8
+       end if
+    end if
+
+    !----------------------------------------------------------------------------------
+    ! View factors for road and one wall in urban canyon (depends only on canyon_hwr)
+    ! ---------------------------------------------------------------------------------------
+    !                                                        WALL    |
+    !                  ROAD                                          |
+    !                                                         wall   |
+    !          -----\          /-----   -             -  |\----------/
+    !              | \  vsr   / |       |         r   |  | \  vww   /   s
+    !              |  \      /  |       h         o   w  |  \      /    k
+    !        wall  |   \    /   | wall  |         a   |  |   \    /     y
+    !              |vwr \  / vwr|       |         d   |  |vrw \  / vsw
+    !              ------\/------       -             -  |-----\/-----
+    !                   road                                  wall   |
+    !              <----- w ---->                                    |
+    !                                                    <---- h --->|
+    !
+    !    vsr = view factor of sky for road          vrw = view factor of road for wall
+    !    vwr = view factor of one wall for road     vww = view factor of opposing wall for wall
+    !                                               vsw = view factor of sky for wall
+    !    vsr + vwr + vwr = 1                        vrw + vww + vsw = 1
+    !
+    ! Source: Masson, V. (2000) A physically-based scheme for the urban energy budget in
+    ! atmospheric models. Boundary-Layer Meteorology 94:357-397
+    !
+    ! - Calculate urban land unit aerodynamic constants using Macdonald (1998) as used in
+    ! Grimmond and Oke (1999)
+    ! ---------------------------------------------------------------------------------------
+
+    ! road -- sky view factor -> 1 as building height -> 0
+    ! and -> 0 as building height -> infinity
+
+    this%vf_sr(l) = sqrt(lun_pp%canyon_hwr(l)**2 + 1._r8) - lun_pp%canyon_hwr(l)
+    this%vf_wr(l) = 0.5_r8 * (1._r8 - this%vf_sr(l))
+
+    ! one wall -- sky view factor -> 0.5 as building height -> 0
+    ! and -> 0 as building height -> infinity
+
+    this%vf_sw(l) = 0.5_r8 * (lun_pp%canyon_hwr(l) + 1._r8 - sqrt(lun_pp%canyon_hwr(l)**2+1._r8)) / lun_pp%canyon_hwr(l)
+    this%vf_rw(l) = this%vf_sw(l)
+    this%vf_ww(l) = 1._r8 - this%vf_sw(l) - this%vf_rw(l)
+
+    ! error check -- make sure view factor sums to one for road and wall
+    sumvf = this%vf_sr(l) + 2._r8*this%vf_wr(l)
+    if (abs(sumvf-1._r8) > 1.e-06_r8 ) then
+       write (iulog,*) 'urban road view factor error',sumvf
+       write (iulog,*) 'elm model is stopping'
+       call endrun(decomp_index=l, elmlevel=namel, msg=errmsg(__FILE__, __LINE__))
+    endif
+    sumvf = this%vf_sw(l) + this%vf_rw(l) + this%vf_ww(l)
+    if (abs(sumvf-1._r8) > 1.e-06_r8 ) then
+       write (iulog,*) 'urban wall view factor error',sumvf
+       write (iulog,*) 'elm model is stopping'
+       call endrun(decomp_index=l, elmlevel=namel, msg=errmsg(__FILE__, __LINE__))
+    endif
+
+    !----------------------------------------------------------------------------------
+    ! Calculate urban land unit aerodynamic constants using Macdonald (1998) as used in
+    ! Grimmond and Oke (1999)
+    !----------------------------------------------------------------------------------
+
+    ! Calculate plan area index
+    plan_ai = lun_pp%canyon_hwr(l)/(lun_pp%canyon_hwr(l) + 1._r8)
+
+    ! Building shape shortside/longside ratio (e.g. 1 = square )
+    ! This assumes the building occupies the entire canyon length
+    build_lw_ratio = plan_ai
+
+    ! Calculate frontal area index
+    frontal_ai = (1._r8 - plan_ai) * lun_pp%canyon_hwr(l)
+
+    ! Adjust frontal area index for different building configuration
+    frontal_ai = frontal_ai * sqrt(1/build_lw_ratio) * sqrt(plan_ai)
+
+    ! Calculate displacement height
+    if (use_vancouver) then
+       lun_pp%z_d_town(l) = 3.5_r8
+    else if (use_mexicocity) then
+       lun_pp%z_d_town(l) = 10.9_r8
+    else
+       lun_pp%z_d_town(l) = (1._r8 + alpha**(-plan_ai) * (plan_ai - 1._r8)) * lun_pp%ht_roof(l)
+    end if
+
+    ! Calculate the roughness length
+    if (use_vancouver) then
+       lun_pp%z_0_town(l) = 0.35_r8
+    else if (use_mexicocity) then
+       lun_pp%z_0_town(l) = 2.2_r8
+    else
+       lun_pp%z_0_town(l) = lun_pp%ht_roof(l) * (1._r8 - lun_pp%z_d_town(l) / lun_pp%ht_roof(l)) * &
+            exp(-1.0_r8 * (0.5_r8 * beta * C_d / vkc**2 * &
+            (1 - lun_pp%z_d_town(l) / lun_pp%ht_roof(l)) * frontal_ai)**(-0.5_r8))
+    end if
+
+  end subroutine SetLunitParams
 
   !-----------------------------------------------------------------------
   subroutine UrbanInput(begg, endg, mode)

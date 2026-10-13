@@ -25,6 +25,8 @@ module dynSubgridControlMod
   public :: get_do_transient_pfts   ! return the value of the do_transient_pfts control flag
   public :: get_do_transient_crops  ! return the value of the do_transient_crops control flag
   public :: get_do_transient_urban  ! return the value of the do_transient_urban control flag
+  public :: get_do_transient_urban_properties ! return the value of the do_transient_urban_properties control flag
+  public :: get_furban_timeseries   ! return the value of the furban_timeseries file name
   public :: run_has_transient_landcover ! returns true if any aspects of prescribed transient landcover are enabled
   public :: get_do_harvest          ! return the value of the do_harvest control flag
   public :: get_for_testing_allow_non_annual_changes ! return true if user has requested to allow area changes at times other than the year boundary, for testing purposes
@@ -41,6 +43,8 @@ module dynSubgridControlMod
      logical :: do_transient_pfts  = .false. ! whether to apply transient natural PFTs from dataset
      logical :: do_transient_crops = .false. ! whether to apply transient crops from dataset
      logical :: do_transient_urban = .false. ! whether to apply transient urban from dataset
+     character(len=fname_len) :: furban_timeseries = ' ' ! transient urban properties dataset
+     logical :: do_transient_urban_properties = .false. ! whether to apply transient urban properties from furban_timeseries
      logical :: do_harvest         = .false. ! whether to apply harvest from dataset
 
      ! The following is only meant for testing: Whether area changes are allowed at times
@@ -116,6 +120,8 @@ contains
     logical :: do_transient_pfts
     logical :: do_transient_crops
     logical :: do_transient_urban
+    character(len=fname_len) :: furban_timeseries
+    logical :: do_transient_urban_properties
     logical :: do_harvest
     logical :: for_testing_allow_non_annual_changes
     logical :: for_testing_zero_dynbal_fluxes
@@ -131,6 +137,8 @@ contains
          do_transient_pfts, &
          do_transient_crops, &
          do_transient_urban, &
+         furban_timeseries, &
+         do_transient_urban_properties, &
          do_harvest, &
          for_testing_allow_non_annual_changes, &
          for_testing_zero_dynbal_fluxes
@@ -140,6 +148,8 @@ contains
     do_transient_pfts  = .false.
     do_transient_crops = .false.
     do_transient_urban = .false.
+    furban_timeseries  = ' '
+    do_transient_urban_properties = .false.
     do_harvest         = .false.
     for_testing_allow_non_annual_changes = .false.
     for_testing_zero_dynbal_fluxes = .false.
@@ -177,6 +187,8 @@ contains
     call shr_mpi_bcast (do_transient_pfts, mpicom)
     call shr_mpi_bcast (do_transient_crops, mpicom)
     call shr_mpi_bcast (do_transient_urban, mpicom)
+    call shr_mpi_bcast (furban_timeseries, mpicom)
+    call shr_mpi_bcast (do_transient_urban_properties, mpicom)
     call shr_mpi_bcast (do_harvest, mpicom)
     call shr_mpi_bcast (for_testing_allow_non_annual_changes, mpicom)
     call shr_mpi_bcast (for_testing_zero_dynbal_fluxes, mpicom)
@@ -186,6 +198,8 @@ contains
          do_transient_pfts = do_transient_pfts, &
          do_transient_crops = do_transient_crops, &
          do_transient_urban = do_transient_urban, &
+         furban_timeseries = furban_timeseries, &
+         do_transient_urban_properties = do_transient_urban_properties, &
          do_harvest = do_harvest, &
          for_testing_allow_non_annual_changes = for_testing_allow_non_annual_changes, &
          for_testing_zero_dynbal_fluxes = for_testing_zero_dynbal_fluxes)
@@ -234,6 +248,14 @@ contains
        if (dyn_subgrid_control_inst%do_harvest) then
           write(iulog,*) 'ERROR: do_harvest can only be true if you are running with'
           write(iulog,*) 'a flanduse_timeseries file (currently flanduse_timeseries is blank)'
+          call endrun(msg=errMsg(sourcefile, __LINE__))
+       end if
+    end if
+
+    if (dyn_subgrid_control_inst%do_transient_urban_properties) then
+       if (dyn_subgrid_control_inst%furban_timeseries == ' ') then
+          write(iulog,*) 'ERROR: do_transient_urban_properties can only be true if you are running with'
+          write(iulog,*) 'a furban_timeseries file (currently furban_timeseries is blank)'
           call endrun(msg=errMsg(sourcefile, __LINE__))
        end if
     end if
@@ -313,6 +335,30 @@ contains
     get_do_transient_urban = dyn_subgrid_control_inst%do_transient_urban
 
   end function get_do_transient_urban
+
+  !-----------------------------------------------------------------------
+  logical function get_do_transient_urban_properties()
+    ! !DESCRIPTION:
+    ! Return the value of the do_transient_urban_properties control flag
+    !-----------------------------------------------------------------------
+
+    SHR_ASSERT(dyn_subgrid_control_inst%initialized, errMsg(sourcefile, __LINE__))
+
+    get_do_transient_urban_properties = dyn_subgrid_control_inst%do_transient_urban_properties
+
+  end function get_do_transient_urban_properties
+
+  !-----------------------------------------------------------------------
+  character(len=fname_len) function get_furban_timeseries()
+    ! !DESCRIPTION:
+    ! Return the value of the furban_timeseries file name
+    !-----------------------------------------------------------------------
+
+    SHR_ASSERT(dyn_subgrid_control_inst%initialized, errMsg(sourcefile, __LINE__))
+
+    get_furban_timeseries = dyn_subgrid_control_inst%furban_timeseries
+
+  end function get_furban_timeseries
 
   !-----------------------------------------------------------------------
   logical function run_has_transient_landcover()

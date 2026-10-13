@@ -547,6 +547,12 @@ Full pathname of time varying PFT data file. This causes the land-use types of
 the initial surface dataset to vary over time.
 </entry>
 
+<entry id="furban_timeseries" type="char*256" category="datasets"
+       input_pathname="abs" group="dynamic_subgrid" valid_values="" >
+Full pathname of the transient urban properties data file (annual urban morphology,
+radiative and thermal properties). Used only when do_transient_urban_properties is TRUE.
+</entry>
+
 <entry id="fsurdat" type="char*256"     category="datasets"
        input_pathname="abs" group="elm_inparm" valid_values="" >
 Full pathname of surface data file.
@@ -2035,6 +2041,15 @@ If TRUE, apply transient crops from flanduse_timeseries file.
 If TRUE, apply transient urban (PCT_URBAN) from flanduse_timeseries file.
 Urban landunits are allocated wherever PCT_URBAN_MAX on the flanduse_timeseries file is > 0.
 (Only valid for transient runs, where there is a flanduse_timeseries file.)
+Default: FALSE
+</entry>
+
+<entry id="do_transient_urban_properties" type="logical" category="physics"
+       group="dynamic_subgrid" valid_values="" >
+If TRUE, apply transient urban properties from the furban_timeseries file
+(updated at the start of each year, no interpolation). Properties not on the file
+keep their fsurdat values.
+(Only valid when furban_timeseries is set.)
 Default: FALSE
 </entry>
 

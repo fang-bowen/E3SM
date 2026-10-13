@@ -2711,6 +2711,7 @@ sub setup_logic_dynamic_subgrid {
    setup_logic_do_transient_pfts($test_files, $nl_flags, $definition, $defaults, $nl, $physv);
    setup_logic_do_transient_crops($test_files, $nl_flags, $definition, $defaults, $nl, $physv);
    setup_logic_do_transient_urban($test_files, $nl_flags, $definition, $defaults, $nl, $physv);
+   setup_logic_do_transient_urban_properties($test_files, $nl_flags, $definition, $defaults, $nl, $physv);
    setup_logic_do_harvest($test_files, $nl_flags, $definition, $defaults, $nl, $physv);
 
 }
@@ -2748,6 +2749,34 @@ sub setup_logic_do_transient_urban {
 
    # Make sure the value is false when it needs to be false - i.e., that the
    # user hasn't tried to set a true value at an inappropriate time.
+   if (value_is_true($nl->get_value($var)) && $cannot_be_true) {
+      fatal_error($cannot_be_true);
+   }
+}
+
+#-------------------------------------------------------------------------------
+sub setup_logic_do_transient_urban_properties {
+   #
+   # Set do_transient_urban_properties default value, and perform error checking
+   #
+   # Assumes the following are already set in the namelist (although it's okay
+   # for them to be unset if that will be their final state):
+   # - furban_timeseries
+   #
+   my ($test_files, $nl_flags, $definition, $defaults, $nl, $physv) = @_;
+
+   my $var = 'do_transient_urban_properties';
+
+   my $cannot_be_true = "";
+
+   if (string_is_undef_or_empty($nl->get_value('furban_timeseries'))) {
+      $cannot_be_true = "$var can only be set to true when furban_timeseries is set";
+   }
+
+   if (!$cannot_be_true) {
+      add_default($test_files, $nl_flags->{'inputdata_rootdir'}, $definition, $defaults, $nl, $var, val=>".false.");
+   }
+
    if (value_is_true($nl->get_value($var)) && $cannot_be_true) {
       fatal_error($cannot_be_true);
    }
