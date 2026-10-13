@@ -42,6 +42,7 @@ module surfrdMod
   ! !PRIVATE MEMBER FUNCTIONS:
   private :: surfrd_special             ! Read the special landunits
   private :: surfrd_veg_all             ! Read all of the vegetated landunits
+  private :: surfrd_urbanmask           ! Read PCT_URBAN_MAX for dynamic urban
   private :: surfrd_pftformat           ! Read crop pfts in file format where they are part of the vegetated land unit
   private :: surfrd_cftformat           ! Read crop pfts in file format where they are on their own landunit
   private :: surfrd_fates_nocropmod     ! Read in crop and pfts and compress them both into wt_nat_patch
@@ -564,8 +565,9 @@ contains
     use elm_varctl  , only : create_crop_landunit, firrig_data
     use fileutils   , only : getfil
     use domainMod   , only : domain_type, domain_init, domain_clean
-    use elm_varsur  , only : wt_lunit, topo_glc_mec
+    use elm_varsur  , only : wt_lunit, topo_glc_mec, pct_urban_max
     use GridcellType, only : grc_pp
+    use dynSubgridControlMod, only : get_do_transient_urban
     use topounit_varcon, only : max_topounits, has_topounit
     !
     ! !ARGUMENTS:
@@ -683,6 +685,14 @@ contains
 
     !call check_sums_equal_1_3d(wt_lunit, begg, 'wt_lunit', subname,ldomain%num_tunits_per_grd)
     call check_sums_equal_1_3d(wt_lunit, begg, 'wt_lunit', subname)
+
+    ! Read the urban mask (PCT_URBAN_MAX), necessary for initialization of dynamic urban
+    if (get_do_transient_urban()) then
+       call surfrd_urbanmask(begg, endg)
+    else
+       ! Set this to zero here; pct_urban_max is only used when do_transient_urban is .true.
+       pct_urban_max(:,:,:) = 0._r8
+    end if
 
     if ( masterproc )then
        write(iulog,*) 'Successfully read surface boundary data'
@@ -1830,5 +1840,74 @@ contains
     end if
 
   end subroutine surfrd_get_nlevurb
+
+  !-----------------------------------------------------------------------
+  subroutine surfrd_urbanmask(begg, endg)
+    !
+    ! !DESCRIPTION:
+    ! Read PCT_URBAN_MAX from the flanduse_timeseries file: the maximum percent of each
+    ! urban density type over the transient run. Urban landunits are allocated (and run,
+    ! possibly virtually) wherever PCT_URBAN_MAX > 0 (see subgridMod and subgridWeightsMod).
+    !
+    ! Also checks that the initial urban weights from the surface dataset do not exceed
+    ! PCT_URBAN_MAX.
+    !
+    ! Ported from CTSM (ctsm5.1.dev083).
+    !
+    ! !USES:
+    use elm_varsur           , only : pct_urban_max, wt_lunit
+    use dynSubgridControlMod , only : get_flanduse_timeseries
+    use elm_varctl           , only : fname_len
+    use fileutils            , only : getfil
+    use landunit_varcon      , only : isturb_MIN
+    !
+    ! !ARGUMENTS:
+    integer, intent(in) :: begg, endg
+    !
+    ! !LOCAL VARIABLES:
+    type(file_desc_t)         :: ncid_dynuse   ! netcdf id for landuse timeseries file
+    character(len=256)        :: locfn         ! local file name
+    character(len=fname_len)  :: fdynuse       ! landuse.timeseries filename
+    logical                   :: readvar
+    integer                   :: g, t, n       ! indices
+    real(r8), parameter       :: tol = 1.e-6_r8 ! tolerance for PCT_URBAN <= PCT_URBAN_MAX check (%)
+
+    character(len=*), parameter :: subname = 'surfrd_urbanmask'
+    !-----------------------------------------------------------------------
+
+    fdynuse = get_flanduse_timeseries()
+
+    if (masterproc) then
+       write(iulog,*) 'Attempting to read PCT_URBAN_MAX from landuse.timeseries data .....'
+       if (fdynuse == ' ') then
+          write(iulog,*) 'fdynuse must be specified'
+          call endrun(msg=errMsg(__FILE__, __LINE__))
+       end if
+    end if
+
+    call getfil(fdynuse, locfn, 0)
+    call ncd_pio_openfile(ncid_dynuse, trim(locfn), 0)
+
+    call ncd_io(ncid=ncid_dynuse, varname='PCT_URBAN_MAX', flag='read', data=pct_urban_max, &
+         dim1name=grlnd, readvar=readvar)
+    if (.not. readvar) call endrun( msg=' ERROR: PCT_URBAN_MAX is not on landuse.timeseries file'//errMsg(__FILE__, __LINE__))
+
+    call ncd_pio_closefile(ncid_dynuse)
+
+    ! Initial urban weights (from fsurdat) must not exceed PCT_URBAN_MAX
+    do g = begg, endg
+       do t = 1, max_topounits
+          do n = 1, numurbl
+             if (wt_lunit(g,t,isturb_MIN+n-1)*100._r8 > pct_urban_max(g,t,n) + tol) then
+                write(iulog,*) subname//' ERROR: PCT_URBAN on fsurdat exceeds PCT_URBAN_MAX'
+                write(iulog,*) 'g, t, density index, PCT_URBAN, PCT_URBAN_MAX = ', &
+                     g, t, n, wt_lunit(g,t,isturb_MIN+n-1)*100._r8, pct_urban_max(g,t,n)
+                call endrun(msg=errMsg(__FILE__, __LINE__))
+             end if
+          end do
+       end do
+    end do
+
+  end subroutine surfrd_urbanmask
 
 end module surfrdMod

@@ -19,6 +19,12 @@ module elm_varsur
   ! whether we have valid urban data in each grid cell or (in each topounit)
   logical , pointer :: urban_valid(:,:)
 
+  ! maximum percent of each urban density type over the transient run (from
+  ! PCT_URBAN_MAX on flanduse_timeseries); used to determine where urban landunits are
+  ! allocated and run (virtually) when do_transient_urban is .true.
+  ! (dims: gridcell, topounit, 1:numurbl)
+  real(r8), pointer :: pct_urban_max(:,:,:)
+
   ! for natural veg landunit, weight of each pft on the landunit (adds to 1.0 on the
   ! landunit for all all grid cells, even! those without any natural pft)
   ! (second dimension goes natpft_lb:natpft_ub)

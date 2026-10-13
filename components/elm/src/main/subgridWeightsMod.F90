@@ -316,8 +316,9 @@ contains
     ! Determine whether the given landunit is active
     !
     ! !USES:
-    use landunit_varcon, only : istsoil, istice, istice_mec
+    use landunit_varcon, only : istsoil, istice, istice_mec, isturb_MIN, isturb_MAX
     use domainMod , only : ldomain
+    use dynSubgridControlMod, only : get_do_transient_urban
     !
     ! !ARGUMENTS:
     implicit none
@@ -358,6 +359,22 @@ contains
        ! is_active_l = .true. for istice_mec landunits on all topounits for the gridcell.
        !if (lun_pp%itype(l) == istice_mec .and. ldomain%glcmask(g) == 1) is_active_l = .true. ! make sure no active l for inactive topounit TKT
        if (top_pp%active(t) .and. lun_pp%itype(l) == istice_mec .and. ldomain%glcmask(g) == 1) is_active_l = .true.
+
+       ! With dynamic urban, set urban landunits to active wherever memory has been
+       ! allocated for them, i.e., wherever pct_urban_max > 0 (see urban_landunit_exists
+       ! in subgridMod). Urban landunits are thus run virtually in grid cells that will
+       ! turn urban later in the transient run. (Ported from CTSM ctsm5.1.dev083.)
+       ! Unlike CTSM, this is applied only when do_transient_urban is .true.: without
+       ! transient urban, ELM allocates urban landunits wherever urban_valid is true
+       ! (pre-existing ELM behavior inherited from older CLM), so activating all
+       ! allocated urban landunits would run zero-weight urban almost everywhere,
+       ! resulting in high computational cost for non-transient runs.
+       if (get_do_transient_urban()) then
+          if (top_pp%active(t) .and. &
+               lun_pp%itype(l) >= isturb_MIN .and. lun_pp%itype(l) <= isturb_MAX) then
+             is_active_l = .true.
+          end if
+       end if
 
        ! In general, include a virtual natural vegetation landunit. This aids
        ! initialization of a new landunit; and for runs that are coupled to CISM, this

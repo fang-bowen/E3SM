@@ -17,6 +17,7 @@ module subgridMod
   ! !PUBLIC MEMBER FUNCTIONS:
   public subgrid_get_gcellinfo        ! Obtain gridcell properties
   public subgrid_get_topounitinfo     ! Obtain topounit properties
+  public urban_landunit_exists        ! returns true if the urban landunit should be created in memory
   !-----------------------------------------------------------------------
 
 contains
@@ -174,11 +175,18 @@ contains
        ! has valid urban parameters, because they might need to come into existence even if
        ! their weight is 0 at the start of the run. And for simplicity, we always allocate
        ! space for ALL columns on the urban landunits.
+    !
+    ! For dynamic urban: to improve efficiency, 'PCT_URBAN_MAX' is added in landuse.timeseries
+    ! that tells if any urban landunit ever grows in a given grid cell in a transient
+    ! run. The urban landunit is allocated only if PCT_URBAN_MAX is greater than 0
+    ! (see urban_landunit_exists; same as CTSM, ESCOMP/CTSM#1572).
+    ! NOTE: we will likely only use the MD density class (TBD and HD kept at 0 on the
+    ! input datasets), but the per-density-class logic is kept for all three classes.
 
        ! Set urban tall building district landunit
 
        npfts_per_lunit = 0
-       if (urban_valid(gi,t)) then
+       if (urban_landunit_exists(gi, t, isturb_tbd)) then
           npfts_per_lunit = maxpatch_urb
           ilunits = ilunits + 1
           icols   = icols + npfts_per_lunit
@@ -189,7 +197,7 @@ contains
        ! Set urban high density landunit
 
        npfts_per_lunit = 0
-       if (urban_valid(gi,t)) then
+       if (urban_landunit_exists(gi, t, isturb_hd)) then
           npfts_per_lunit = maxpatch_urb
           ilunits = ilunits + 1
           icols   = icols + npfts_per_lunit
@@ -200,7 +208,7 @@ contains
        ! Set urban medium density landunit
 
        npfts_per_lunit = 0
-       if (urban_valid(gi,t)) then
+       if (urban_landunit_exists(gi, t, isturb_md)) then
           npfts_per_lunit = maxpatch_urb
           ilunits = ilunits + 1
           icols   = icols + npfts_per_lunit
@@ -449,11 +457,18 @@ contains
     ! has valid urban parameters, because they might need to come into existence even if
     ! their weight is 0 at the start of the run. And for simplicity, we always allocate
     ! space for ALL columns on the urban landunits.
+    !
+    ! For dynamic urban: to improve efficiency, 'PCT_URBAN_MAX' is added in landuse.timeseries
+    ! that tells if any urban landunit ever grows in a given grid cell in a transient
+    ! run. The urban landunit is allocated only if PCT_URBAN_MAX is greater than 0
+    ! (see urban_landunit_exists; same as CTSM, ESCOMP/CTSM#1572).
+    ! NOTE: we will likely only use the MD density class (TBD and HD kept at 0 on the
+    ! input datasets), but the per-density-class logic is kept for all three classes.
 
     ! Set urban tall building district landunit
 
     npfts_per_lunit = 0
-    if (urban_valid(gi,tgi)) then
+    if (urban_landunit_exists(gi, tgi, isturb_tbd)) then
        npfts_per_lunit = maxpatch_urb
        ilunits = ilunits + 1
        icols   = icols + npfts_per_lunit
@@ -464,7 +479,7 @@ contains
     ! Set urban high density landunit
 
     npfts_per_lunit = 0
-    if (urban_valid(gi,tgi)) then
+    if (urban_landunit_exists(gi, tgi, isturb_hd)) then
        npfts_per_lunit = maxpatch_urb
        ilunits = ilunits + 1
        icols   = icols + npfts_per_lunit
@@ -475,7 +490,7 @@ contains
     ! Set urban medium density landunit
 
     npfts_per_lunit = 0
-    if (urban_valid(gi,tgi)) then
+    if (urban_landunit_exists(gi, tgi, isturb_md)) then
        npfts_per_lunit = maxpatch_urb
        ilunits = ilunits + 1
        icols   = icols + npfts_per_lunit
@@ -595,5 +610,42 @@ contains
     if (present(ncohorts))     ncohorts = icohorts
 
   end subroutine subgrid_get_topounitinfo
-  
+
+  !-----------------------------------------------------------------------
+  function urban_landunit_exists(gi, ti, ltype) result(exists)
+    !
+    ! !DESCRIPTION:
+    ! Returns true if a landunit for the given urban density type should be created in
+    ! memory on the given gridcell / topounit.
+    !
+    ! With do_transient_urban, this is wherever the urban density type will exist at any
+    ! time in the run, given by pct_urban_max (ported from CTSM ctsm5.1.dev083).
+    ! Otherwise, this keeps the standard ELM behavior: wherever urban_valid is true.
+    !
+    ! !USES:
+    use dynSubgridControlMod , only : get_do_transient_urban
+    use elm_varsur           , only : urban_valid, pct_urban_max
+    use landunit_varcon      , only : isturb_MIN
+    !
+    ! !ARGUMENTS:
+    logical :: exists           ! function result
+    integer, intent(in) :: gi    ! grid cell index
+    integer, intent(in) :: ti    ! topounit index within the grid cell (1..max_topounits)
+    integer, intent(in) :: ltype ! landunit type (isturb_tbd, isturb_hd or isturb_md)
+    !
+    ! !LOCAL VARIABLES:
+    integer :: dens_index ! urban density type index
+
+    character(len=*), parameter :: subname = 'urban_landunit_exists'
+    !-----------------------------------------------------------------------
+
+    if (get_do_transient_urban()) then
+       dens_index = ltype - isturb_MIN + 1
+       exists = (pct_urban_max(gi,ti,dens_index) > 0.0_r8)
+    else
+       exists = urban_valid(gi,ti)
+    end if
+
+  end function urban_landunit_exists
+
 end module subgridMod

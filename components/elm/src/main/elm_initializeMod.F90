@@ -15,6 +15,7 @@ module elm_initializeMod
   use elm_varctl       , only : use_fates, use_betr, use_fates_sp, use_fan, use_fates_luh
   use elm_varsur       , only : wt_lunit, urban_valid, wt_nat_patch, wt_cft, wt_glc_mec, topo_glc_mec,firrig,f_surf,f_grd
   use elm_varsur       , only : fert_cft, fert_p_cft, wt_polygon
+  use elm_varsur       , only : pct_urban_max
   use elm_varsur       , only : wt_tunit, elv_tunit, slp_tunit,asp_tunit,num_tunit_per_grd
   use perf_mod         , only : t_startf, t_stopf
   !use readParamsMod    , only : readParameters
@@ -76,6 +77,7 @@ contains
     use surfrdMod                 , only: surfrd_get_nlevurb
     use elm_varcon                , only: elm_varcon_init
     use landunit_varcon           , only: landunit_varcon_init, max_lunit, istice_mec, max_polygon, max_non_poly_lunit
+    use landunit_varcon           , only: numurbl
     use column_varcon             , only: col_itype_to_icemec_class
     use elm_varctl                , only: fsurdat, fatmlndfrc, flndtopo, fglcmask, noland, version
     use pftvarcon                 , only: pftconrd
@@ -316,6 +318,7 @@ contains
       allocate (wt_lunit     (begg:endg,1:max_topounits, max_non_poly_lunit  ))
     end if
     allocate (urban_valid  (begg:endg,1:max_topounits                      ))
+    allocate (pct_urban_max(begg:endg,1:max_topounits, numurbl             ))
     !allocate (wt_nat_patch (begg:endg,1:max_topounits, surfpft_lb:surfpft_ub ))
     !allocate (wt_cft       (begg:endg,1:max_topounits, cft_lb:cft_ub       ))
     !allocate (fert_cft     (begg:endg,1:max_topounits, cft_lb:cft_ub       ))
@@ -473,7 +476,8 @@ contains
 
     ! Deallocate surface grid dynamic memory for variables that aren't needed elsewhere.
     ! Some things are kept until the end of initialize2; urban_valid is kept through the
-    ! end of the run for error checking.
+    ! end of the run for error checking; pct_urban_max is kept through the end of the run
+    ! for determining which urban landunits are active (subgridWeightsMod).
 
     !deallocate (wt_lunit, wt_cft, wt_glc_mec)
     deallocate (wt_cft, wt_glc_mec)    !wt_lunit not deallocated because it is being used in CanopyHydrologyMod.F90
